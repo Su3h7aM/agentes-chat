@@ -47,11 +47,16 @@ function jevThatDay(to?: Record<string, number>, day: typeof ASKS = ASKS) {
     const answers: Record<string, unknown> = {
       needs_agent: { noul: day.needs },
       for_everyone: { noul: 0.1 },
+      already_answered: { noul: 0 },
+      social: { choice: "none", probabilities: { none: 1 }, confidence: 1 },
       best_agent: { choice: "theo", probabilities: day.choice, confidence: day.choice.theo },
     };
     for (const [id, q] of Object.entries(questions))
       if (id.startsWith("agent_")) answers[id] = { noul: nouls[q.instructions.agent?.handle ?? ""] ?? 0.05 };
-    if (to && questions.addressee) answers.addressee = { choice: "ada", probabilities: to, confidence: 0.8 };
+    if (questions.addressee)
+      answers.addressee = to
+        ? { choice: "ada", probabilities: to, confidence: 0.8 }
+        : { choice: "none", probabilities: { none: 1 }, confidence: 1 };
     return Response.json({ model: "jev-1.14.0", answers, usage: { input_tokens: 1500 } });
   }) as unknown as typeof fetch;
   return { states, strategy: createJevRouterStrategy({ key: "k", recordUsage: async () => {}, fetch: fetcher }) };
@@ -99,8 +104,22 @@ test("the harness: a reply case quotes the agent's message or answers in its thr
     recordUsage: async () => {},
     fetch: (async (_url: string, init: RequestInit) => {
       const { questions } = JSON.parse(String(init.body)) as { questions: Record<string, unknown> };
-      const noul = (id: string) => ({ noul: id === "needs_agent" ? 0.2 : 0.05 });
-      return Response.json({ answers: Object.fromEntries(Object.keys(questions).map((id) => [id, noul(id)])) });
+      const answer = (id: string, q: { type?: string; criteria?: Record<string, string> }) =>
+        q.type === "choice"
+          ? {
+              choice: q.criteria && "none" in q.criteria ? "none" : (Object.keys(q.criteria ?? {})[0] ?? "none"),
+              probabilities: { none: 1 },
+              confidence: 1,
+            }
+          : { noul: id === "needs_agent" ? 0.2 : 0.05 };
+      return Response.json({
+        answers: Object.fromEntries(
+          Object.entries(questions).map(([id, q]) => [
+            id,
+            answer(id, q as { type?: string; criteria?: Record<string, string> }),
+          ]),
+        ),
+      });
     }) as unknown as typeof fetch,
   });
   const evaluation = await routerEval();
@@ -127,6 +146,9 @@ test("the harness: the default cases pass on a Jev that gives every agent too li
         const answers: Record<string, unknown> = { needs_agent: { noul: needs }, for_everyone: { noul: 0.1 } };
         for (const [id, q] of Object.entries(questions))
           if (id.startsWith("agent_")) answers[id] = { noul: q.instructions.agent?.handle === "@atlas" ? 0.3 : 0.2 };
+          else if (id === "social" || id === "best_agent" || id === "addressee")
+            answers[id] = { choice: "none", probabilities: { none: 1 }, confidence: 1 };
+          else if (id === "already_answered") answers[id] = { noul: 0 };
         return Response.json({ answers });
       }) as unknown as typeof fetch,
     });

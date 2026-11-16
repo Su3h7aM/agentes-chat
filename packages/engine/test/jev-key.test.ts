@@ -380,6 +380,21 @@ describe("Jev through OpenRouter (ADR 0073 §9)", () => {
     expect(openRouterJevModel("jev-latest")).toBe("~typesafe/jev-latest");
     expect(openRouterJevModel("jev-preview")).toBe("~typesafe/jev-latest");
     expect(openRouterJevModel("jev-1.14")).toBe("typesafe/jev-1.14");
+    expect(openRouterJevModel("typesafe/jev-1.14")).toBe("typesafe/jev-1.14");
+    expect(openRouterJevModel("jaredpalmer/kev-4b")).toBe("jaredpalmer/kev-4b");
+  });
+
+  test("a workspace's explicit OpenRouter model id is sent exactly as saved", async () => {
+    for (const model of ["custom-model", "vendor/model", "jev-latest", "jev-preview", "typesafe/jev-1.14"]) {
+      const or = recorder();
+      await callJev("sk-or-workspace", {
+        body: { model, state: "ok", questions: {} },
+        transport: "openrouter",
+        timeoutMs: 2000,
+        fetch: or.fetch,
+      });
+      expect(or.calls[0]?.body.model, model).toBe(model);
+    }
   });
 
   test("OpenRouter's errors say the same about the key as TypeSafe's", async () => {

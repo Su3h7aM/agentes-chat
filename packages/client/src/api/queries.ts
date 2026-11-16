@@ -124,6 +124,7 @@ import type {
   ComputerSetup,
   DatabaseActionName,
   DatabaseConnectionInput,
+  DecisionSettings,
   DeletionProofInput,
   DirectMessage,
   DmRead,
@@ -439,6 +440,37 @@ function useJevChange<T>(change: (api: ApiClient, input: T) => Promise<JevKey>, 
 export const useSaveJevKey = () => useJevChange((api, input: JevKeyInput) => api.system.saveJev(input), true);
 export const useCheckJevKey = () => useJevChange<void>((api) => api.system.checkJev());
 export const useRemoveJevKey = () => useJevChange<void>((api) => api.system.removeJev());
+
+export function useDecisionSettings(orgId: string, enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.decisions(orgId), queryFn: () => api.system.decisions(orgId), enabled });
+}
+
+export function useSaveDecisionSettings(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: DecisionSettings | null) => api.system.saveDecisions(orgId, settings),
+    onSuccess: (view) => {
+      qc.setQueryData(keys.decisions(orgId), view);
+      void qc.invalidateQueries({ queryKey: keys.aiStatus(orgId) });
+    },
+    meta: { silent: true },
+  });
+}
+
+export function useResetDecisionSettings(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.system.resetDecisions(orgId),
+    onSuccess: (view) => {
+      qc.setQueryData(keys.decisions(orgId), view);
+      void qc.invalidateQueries({ queryKey: keys.aiStatus(orgId) });
+    },
+    meta: { silent: true },
+  });
+}
 
 /** The installation's GIPHY key (ADR 0091): `null` for everyone but its owner on a self-hosted server. */
 export const useGifKey = () => {

@@ -47,9 +47,11 @@ import { Note } from "./parts";
 export function EndpointForm({
   orgId,
   onDone,
+  onCancel,
 }: {
   orgId: string;
   onDone: (saved: Credential) => void | Promise<void>;
+  onCancel?: () => void;
 }) {
   const { t } = useTranslation();
   const { colors: c } = useTheme();
@@ -360,6 +362,9 @@ export function EndpointForm({
         disabled={!endpointReady(draft) || listing}
         onPress={() => void save()}
       />
+      {onCancel ? (
+        <Button variant="ghost" wide label={t("common.cancel")} disabled={saving} onPress={onCancel} />
+      ) : null}
     </View>
   );
 }

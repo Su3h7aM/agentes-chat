@@ -12,6 +12,7 @@ export * from "./catalog";
 export * from "./commandcode";
 export * from "./context-limits";
 export * from "./custom";
+export * from "./decision-endpoint";
 export * from "./embeddings";
 export * from "./gemini";
 export * from "./images";

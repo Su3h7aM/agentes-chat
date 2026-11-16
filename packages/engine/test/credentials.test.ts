@@ -11,6 +11,7 @@ import {
   deleteCredential,
   ForbiddenError,
   listCredentials,
+  makeDefaultCredential,
   NEW_AGENT_DEFAULTS,
   openRouterInUse,
   removeCredentialCopies,
@@ -216,6 +217,27 @@ describe("removing a key", () => {
       code: "credential.default",
     });
   });
+
+  test("a decision credential is not revoked or deleted silently; an explicit delete resets the choice", async () => {
+    const decisions = {
+      credentialId: f.credential.id,
+      model: "jaredpalmer/kev-4b",
+      visionModel: null,
+    };
+    await f.db
+      .insert(schema.organizationSettings)
+      .values({ orgId: f.org.id, decisions })
+      .onConflictDoUpdate({ target: schema.organizationSettings.orgId, set: { decisions } });
+    await expect(revokeCredential(f.db, f.owner.id, f.org.id, f.credential.id)).rejects.toMatchObject({
+      code: "credential.decision_in_use",
+    });
+    await expect(deleteCredential(f.db, f.owner.id, f.org.id, f.credential.id)).rejects.toMatchObject({
+      code: "credential.decision_in_use",
+    });
+    await deleteCredential(f.db, f.owner.id, f.org.id, f.credential.id, { release: true });
+    const [settings] = await f.db.select().from(schema.organizationSettings);
+    expect(settings?.decisions).toBeNull();
+  });
 });
 
 describe("an OpenRouter key", () => {
@@ -336,6 +358,53 @@ describe("the same key saved again", () => {
   });
 });
 
+describe("a custom chat endpoint", () => {
+  const net = { allowPrivate: false, resolveHost: async () => ["93.184.216.34"] };
+  const baseURL = "https://same.example.com/v1";
+  const apiKey = "decision-endpoint-key";
+  const save = (makeDefault = false, models = [{ id: "chat-model" }]) =>
+    createCredential(
+      f.db,
+      f.keyWrapper,
+      f.owner.id,
+      f.org.id,
+      {
+        provider: "custom",
+        label: "Chat",
+        apiKey,
+        makeDefault,
+        endpoint: { style: "openai", baseURL, models },
+      },
+      { net },
+    );
+  const stored = async () =>
+    (await f.db.select().from(schema.providerCredentials)).filter((r) => r.provider === "custom");
+
+  test("saving it again keeps its original identity, models and default", async () => {
+    const first = await save(true);
+    const again = await save(true);
+    expect(again).toMatchObject({ id: first.id, reused: true });
+    const rows = await stored();
+    expect(rows.map((r) => r.id)).toEqual([first.id]);
+    expect(rows[0]?.options.endpoint).toEqual({
+      style: "openai",
+      baseURL,
+      models: [{ id: "chat-model" }],
+    });
+    expect((await defaultCredentials(f.db, f.org.id)).perProvider.custom).toBe(first.id);
+    expect(await removeCredentialCopies(f.db, [f.keyWrapper], f.owner.id, f.org.id, first.id)).toEqual({
+      removed: 0,
+    });
+  });
+
+  test("its models stay chat models, and Make default accepts it", async () => {
+    const chat = await save(false, [{ id: "chat-model" }, { id: "decision-model" }]);
+    await makeDefaultCredential(f.db, f.owner.id, f.org.id, chat.id);
+    expect((await defaultCredentials(f.db, f.org.id)).perProvider.custom).toBe(chat.id);
+    expect((await stored())[0]?.options.endpoint?.models.map((m) => m.id)).toEqual(["chat-model", "decision-model"]);
+  });
+});
+
 describe("copies saved before", () => {
   // A copy as one was made before a save looked for it: another key, then given the same secret.
   const copyOf = async (label: string) => {
@@ -379,7 +448,12 @@ describe("copies saved before", () => {
       { name: "Rio", handle: "rio", role: "x", instructions: "x", credentialId: copy },
       NEW_AGENT_DEFAULTS,
     );
-    const defaults = { defaultCredentialId: copy, defaultCredentialIds: { anthropic: copy, openai: "x" } };
+    const decisions = { credentialId: copy, model: "jaredpalmer/kev-4b", visionModel: null };
+    const defaults = {
+      defaultCredentialId: copy,
+      defaultCredentialIds: { anthropic: copy, openai: "x" },
+      decisions,
+    };
     await f.db
       .insert(schema.organizationSettings)
       .values({ orgId: f.org.id, ...defaults })
@@ -407,6 +481,8 @@ describe("copies saved before", () => {
       legacy: f.credential.id,
       perProvider: { anthropic: f.credential.id, openai: "x" },
     });
+    const [settings] = await f.db.select().from(schema.organizationSettings);
+    expect(settings?.decisions).toEqual({ ...decisions, credentialId: f.credential.id });
     const [spent] = await f.db.select().from(schema.usageRecords);
     expect(spent?.credentialId).toBe(f.credential.id);
     expect(await removeCredentialCopies(f.db, [f.keyWrapper], f.owner.id, f.org.id, f.credential.id)).toEqual({

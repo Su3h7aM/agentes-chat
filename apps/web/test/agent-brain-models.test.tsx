@@ -171,6 +171,42 @@ describe("Quem pensa: a coding plan's models", () => {
     return { state, api };
   }
 
+  test("a custom endpoint used for decisions is also offered as a chat key", async () => {
+    const state = seedState();
+    state.credentials = [
+      ...state.credentials,
+      {
+        id: "cred-other",
+        provider: "anthropic",
+        label: "Chave do time",
+        keyHint: "99aa",
+        createdAt: "2026-11-01T00:00:00.000Z",
+        revokedAt: null,
+      },
+      {
+        id: "cred-decisions",
+        provider: "custom",
+        label: "Decisões",
+        keyHint: "",
+        createdAt: "2026-11-02T00:00:00.000Z",
+        revokedAt: null,
+        endpoint: {
+          style: "openai",
+          baseURL: "https://llm.example.com/v1",
+          models: [{ id: "gateway/model" }],
+        },
+      },
+    ];
+    await open(state);
+    const d = await brainDialog();
+    await toScreen(d, "Trocar de conta");
+    expect(brainRows(d).map((r) => r.title)).toContain("Chave padrão do workspace");
+    await toScreen(d, "Ver as");
+    const titles = brainRows(d).map((r) => r.title);
+    expect(titles).toContain("Chave do time");
+    expect(titles).toContain("Decisões");
+  });
+
   test("the agent's model at a limit of its own: said under the plan's meters, which show the account's room", async () => {
     const at = new Date().toISOString();
     const until = new Date(Date.now() + 2 * 86_400_000).toISOString();

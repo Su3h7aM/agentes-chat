@@ -33,6 +33,8 @@ import type {
   ConnectorDef,
   ConsultationConversation,
   Credential,
+  DecisionSettings,
+  DecisionSettingsView,
   DeviceAccount,
   Edition,
   EmailChange,
@@ -421,6 +423,12 @@ export interface FakeState {
    * `rate_limited`: the server's limit answers the first try (429), and the next one goes through.
    */
   jevVerdicts?: Record<string, "invalid" | "no_credit" | "rate_limited">;
+  /** `system.decisions`: the workspace's own decision models; unset = the installation's setup. */
+  decisions?: DecisionSettingsView;
+  /** `system.saveDecisions` throws this (a probe that failed, a gone account). */
+  decisionSaveError?: ApiError;
+  /** `system.resetDecisions` throws this (the installation's Jev couldn't be restored). */
+  decisionResetError?: ApiError;
   /**
    * `system.gifKey`: the installation's GIPHY key (ADR 0091); unset = I'm not its owner on a self-hosted server
    * (null). Saving one makes GIFs available here (`media.gifsAvailable`), removing it takes them away.
@@ -1552,6 +1560,23 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
         return { ...offer, state: decision === "send" ? "sent" : "dismissed", decidedAt: new Date().toISOString() };
       },
       jev: async () => state.jev ?? null,
+      decisions: async (orgId) => {
+        log("system.decisions", orgId);
+        return state.decisions ?? { settings: null, available: false };
+      },
+      saveDecisions: async (orgId, settings: DecisionSettings | null) => {
+        log("system.saveDecisions", orgId, settings);
+        if (state.decisionSaveError) throw state.decisionSaveError;
+        const available = Boolean(settings && state.credentials.some((c) => c.id === settings.credentialId));
+        state.decisions = { settings, available };
+        return state.decisions;
+      },
+      resetDecisions: async (orgId) => {
+        log("system.resetDecisions", orgId);
+        if (state.decisionResetError) throw state.decisionResetError;
+        state.decisions = { settings: null, available: false };
+        return state.decisions;
+      },
       saveJev: async (input) => {
         log("system.saveJev", input);
         if (!state.jev) throw new ApiError(404, "not_found", "Not found");

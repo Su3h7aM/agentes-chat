@@ -454,7 +454,11 @@ describe("Jev and the small model", () => {
       status === 200
         ? Response.json({
             model: "jev-1.14.0",
-            answers: { needs_agent: { type: "noul", noul: 0.9 }, agent_0: { type: "noul", noul: 0.9 } },
+            answers: {
+              needs_agent: { type: "noul", noul: 0.9 },
+              agent_0: { type: "noul", noul: 0.9 },
+              social: { type: "choice", choice: "none", probabilities: { none: 1 }, confidence: 1 },
+            },
             usage: { input_tokens: 900, output_tokens: 10 },
           })
         : new Response("boom", { status })) as unknown as typeof fetch;

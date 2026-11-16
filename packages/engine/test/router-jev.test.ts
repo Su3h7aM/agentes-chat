@@ -14,6 +14,7 @@ import {
   createLlmJudge,
   DEFAULT_PICKS_PER_HOUR,
   DEFAULT_ROUTER_POLICY,
+  decisionUsage,
   drainOutbox,
   insertMessage,
   JevOffError,
@@ -119,6 +120,63 @@ describe("routeChain", () => {
   });
 });
 
+describe("typed decision answers", () => {
+  const routed = (candidates = [cand("a")]): RoutingInput => ({
+    orgId: "o",
+    channel: { id: "c", name: "geral", topic: "" },
+    message: { id: "m", author: "ana", body: "hello", names: [] },
+    thread: [],
+    candidates,
+  });
+  const strategy = (answers: unknown) =>
+    createJevRouterStrategy({
+      key: "k",
+      recordUsage: async () => {},
+      fetch: (async () => Response.json({ answers })) as unknown as typeof fetch,
+    });
+
+  test("an HTTP 200 missing a requested answer fails the step instead of scoring zero", async () => {
+    await expect(strategy({ needs_agent: { noul: 0.9 } }).decide(routed())).rejects.toThrow('no answer for "agent_0"');
+  });
+
+  test("a Noul outside 0..1 and a Choice outside its options are refused", async () => {
+    await expect(strategy({ needs_agent: { noul: 2 }, agent_0: { noul: 1 } }).decide(routed())).rejects.toThrow(
+      'invalid Noul for "needs_agent"',
+    );
+    await expect(
+      strategy({
+        needs_agent: { noul: 0.9 },
+        agent_0: { noul: 0.9 },
+        agent_1: { noul: 0.1 },
+        for_everyone: { noul: 0.1 },
+        best_agent: { choice: "ghost", probabilities: { ghost: 1 }, confidence: 1 },
+      }).decide(routed([cand("a"), cand("b")])),
+    ).rejects.toThrow('invalid Choice for "best_agent"');
+  });
+
+  test("a workspace decision call costs what it reports; zero is kept and a missing cost is refused", () => {
+    expect(decisionUsage("systemone", { input_tokens: 3, cost: 0 })).toEqual({
+      provider: "systemone",
+      costNanoUsd: 0,
+    });
+    expect(decisionUsage("openrouter", { cost: 0.000001 })).toEqual({
+      provider: "openrouter-decisions",
+      costNanoUsd: 1000,
+    });
+    // A custom endpoint's cost is optional: none, or one that isn't a usable number, records zero.
+    expect(decisionUsage("systemone", {})).toEqual({ provider: "systemone", costNanoUsd: 0 });
+    expect(decisionUsage("systemone", { cost: Number.NaN })).toEqual({ provider: "systemone", costNanoUsd: 0 });
+    expect(decisionUsage("systemone", { cost: 0.000001 })).toEqual({ provider: "systemone", costNanoUsd: 1000 });
+    // OpenRouter always reports its charge, so a missing one is still refused.
+    expect(() => decisionUsage("openrouter", {})).toThrow("invalid cost");
+    expect(() => decisionUsage("openrouter", { cost: -1 })).toThrow("invalid cost");
+    expect(decisionUsage(undefined, { input_tokens: 1000 })).toEqual({
+      provider: "typesafe",
+      costNanoUsd: 42_000,
+    });
+  });
+});
+
 /**
  * A fake TypeSafe endpoint: records requests, answers with scripted nouls per handle, `choice`, the tie-break
  * Choice's probabilities by handle (default 0.9 for `best`), and `to`, the addressee Choice's (none: "none").
@@ -152,6 +210,7 @@ function fakeJev(
         answers[key] = { type: "noul", noul: r.nouls[q.instructions.agent?.handle ?? ""] ?? 0 };
     }
     if (body.questions.for_everyone) answers.for_everyone = { type: "noul", noul: r.everyone ?? 0 };
+    if (body.questions.already_answered) answers.already_answered = { type: "noul", noul: 0 };
     if (body.questions.best_agent) {
       answers.best_agent = {
         type: "choice",
@@ -165,8 +224,10 @@ function fakeJev(
       const [choice] = Object.entries(to).sort((a, b) => b[1] - a[1])[0] ?? ["none"];
       answers.addressee = { type: "choice", choice, probabilities: to, confidence: 0.8 };
     }
-    if (body.questions.social && r.social)
-      answers.social = { type: "choice", ...r.social, probabilities: { [r.social.choice]: r.social.confidence } };
+    if (body.questions.social) {
+      const social = r.social ?? { choice: "none", confidence: 0.9 };
+      answers.social = { type: "choice", ...social, probabilities: { [social.choice]: social.confidence } };
+    }
     return Response.json({ model: "jev-1.14.0", answers, usage: { input_tokens: 1200, output_tokens: 30 } });
   }) as unknown as typeof fetch;
   return { fetcher, requests };
@@ -191,12 +252,12 @@ describe("Jev's questions", () => {
     return { decided, jev };
   };
 
-  test("a clear pick from the set reacts; an unsure one, none or a choice outside the set doesn't", async () => {
+  test("a clear pick from the set reacts; an unsure one or none doesn't; an option outside the set is rejected", async () => {
     expect((await socialOf({ choice: "🌙", confidence: 0.9 })).decided.social).toEqual({ react: true, emoji: "🌙" });
     expect((await socialOf({ choice: "🌙", confidence: 0.3 })).decided.social).toEqual({ react: false, emoji: "🌙" });
     expect((await socialOf({ choice: "none", confidence: 0.9 })).decided.social).toEqual({ react: false, emoji: "" });
-    expect((await socialOf({ choice: "🖕", confidence: 0.9 })).decided.social).toEqual({ react: false, emoji: "" });
-    expect((await socialOf(undefined)).decided.social).toBeUndefined();
+    await expect(socialOf({ choice: "🖕", confidence: 0.9 })).rejects.toThrow('invalid Choice for "social"');
+    expect((await socialOf(undefined)).decided.social).toEqual({ react: false, emoji: "" });
   });
 
   test("insisting that nobody answered is a yes to 'should any agent reply?'", async () => {

@@ -565,17 +565,26 @@ export function keyRemovalText(
   key: Pick<Credential, "id" | "usedBy">,
   live: readonly Pick<Credential, "id">[],
   platform: boolean,
+  decisionInUse?: boolean,
 ) {
   const used = key.usedBy ?? [];
-  if (used.length === 0) return t("settings.removeUnused");
-  const others = platform || live.some((k) => k.id !== key.id);
-  return t(others ? "settings.removeUsedOther" : "settings.removeUsedNone", {
-    count: used.length,
-    agents: joinNames(
-      used.map((a) => a.name),
-      t,
-    ),
-  });
+  const base =
+    used.length === 0
+      ? t("settings.removeUnused")
+      : t(platform || live.some((k) => k.id !== key.id) ? "settings.removeUsedOther" : "settings.removeUsedNone", {
+          count: used.length,
+          agents: joinNames(
+            used.map((a) => a.name),
+            t,
+          ),
+        });
+  const decision =
+    decisionInUse === true
+      ? t("settings.removeDecisionInUse")
+      : decisionInUse === undefined
+        ? t("settings.removeDecisionUnknown")
+        : null;
+  return decision ? `${base} ${decision}` : base;
 }
 
 /**

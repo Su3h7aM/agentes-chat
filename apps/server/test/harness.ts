@@ -226,6 +226,7 @@ export async function createTestServer(
       router: engine.router,
       streams: engine.streams,
       jevKey: engine.jevKey,
+      decisions: engine.decisions,
       gifKey,
       githubApp: engine.githubApp,
       speech: engine.speech,

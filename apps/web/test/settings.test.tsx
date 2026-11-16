@@ -603,11 +603,14 @@ describe("Configurações do workspace", () => {
     expect(state.calls.findLast((c) => c.method === "orgs.updateSettings")?.args[1]).toEqual({
       defaultAgentBudgetUsd: 80,
     });
-    // An admin who isn't the server's owner: no Jev anywhere (its key is the owner's, jev.test.tsx).
-    expect(document.body.textContent).not.toMatch(/jev|typesafe/i);
+    // An admin who isn't the server's owner: no separate Jev key card. The one decision card says where the key lives.
+    expect(screen().queryByRole("region", { name: "Jev" })).toBeNull();
+    const decisions = screen().getByRole("region", { name: "Quem escolhe os agentes" });
+    expect(decisions.textContent).toContain("Jev (TypeSafe)");
+    expect(decisions.textContent).toContain("O dono deste servidor configura o Jev.");
   });
 
-  test("on the Cloud, Jev is named only in who picks the agents: no card, no TypeSafe", async () => {
+  test("on the Cloud, the decision card names Jev but never opens its key setup", async () => {
     const state = seedState({
       aiStatus: {
         any: true,
@@ -618,16 +621,18 @@ describe("Configurações do workspace", () => {
     });
     await go(state, "settings/keys");
     const section = screen().getByRole("region", { name: "Quem escolhe os agentes" });
-    expect(section.textContent).toBe(
+    expect(section.textContent).toStartWith(
       "Quem escolhe os agentesComo os agentes são escolhidosO Jev escolhe quem responde cada mensagem sem menção.",
     );
     expect(screen().queryByRole("region", { name: "Jev" })).toBeNull();
-    expect(document.body.textContent).not.toMatch(/typesafe/i);
-    // A workspace with no AI says nothing about who picks.
+    expect(within(section).queryByRole("button", { name: "Configurar o Jev" })).toBeNull();
+    // A workspace with no AI says nothing about who picks; its decision choice is still configurable.
     cleanup();
     state.aiStatus = { ...(state.aiStatus as NonNullable<typeof state.aiStatus>), any: false };
     await go(state, "settings/keys");
-    expect(screen().queryByRole("region", { name: "Quem escolhe os agentes" })).toBeNull();
+    const noAi = screen().getByRole("region", { name: "Quem escolhe os agentes" });
+    expect(noAi.querySelector(":scope > .who-line")).toBeNull();
+    expect(noAi.querySelector(".jev-decision .who-line")).toBeTruthy();
     // Members don't read it.
     cleanup();
     if (state.me?.organizations[0]) state.me.organizations[0].role = "member";
@@ -964,6 +969,31 @@ const endpointCred: Credential = {
   revokedAt: null,
   endpoint: { style: "openai", baseURL: "https://llm.example.com/v1", models: [] },
 };
+
+test("a custom endpoint used for decisions can also become the chat default", async () => {
+  await go(
+    seedState({
+      credentials: [
+        {
+          ...endpointCred,
+          id: "cred-decisions",
+          label: "Decision service",
+          endpoint: {
+            style: "openai",
+            baseURL: "https://llm.example.com/v1",
+            models: [{ id: "gateway/model" }],
+          },
+        },
+      ],
+    }),
+    "settings/keys",
+  );
+  const keys = screen().getByRole("region", { name: "Chaves de provedor" });
+  const row = within(keys).getByText("Decision service").closest(".ac-list__row") as HTMLElement;
+  expect(row.textContent).not.toContain("Só decisões");
+  expect(within(row).getByRole("button", { name: "Tornar padrão" })).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Modelos" })).toBeTruthy();
+});
 
 test("a workspace's own endpoint key rotates whatever it looks like", async () => {
   const { state } = await go(seedState({ credentials: [endpointCred] }), "settings/keys");

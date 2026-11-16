@@ -496,7 +496,11 @@ export function agentRoutes(deps: AppDeps) {
               .optional()
               .openapi({ description: "Make it the workspace's default key in the same call (onboarding)." }),
             endpoint: z
-              .object({ style: EndpointStyle, baseURL: z.string().min(1).max(500), models: z.array(EndpointModel) })
+              .object({
+                style: EndpointStyle,
+                baseURL: z.string().min(1).max(500),
+                models: z.array(EndpointModel),
+              })
               .optional()
               .openapi({ description: "`custom` only: the endpoint's address, API and the models it offers." }),
           }),

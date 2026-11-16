@@ -6,6 +6,7 @@ import {
   useComposioUsage,
   useComputerSetup,
   useCredentials,
+  useDecisionSettings,
   useJoinRequests,
   usePlatformKey,
   useRemoveCredential,
@@ -829,6 +830,7 @@ function KeysSection() {
   const { org } = useOrg();
   const allowed = can(org, "manage_credentials");
   const credentials = useCredentials(org.id, allowed);
+  const decisions = useDecisionSettings(org.id, allowed);
   const settings = useSettings(org.id);
   const platform = usePlatformKey(org.id);
   const updateSettings = useUpdateSettings(org.id);
@@ -915,11 +917,7 @@ function KeysSection() {
                   </span>
                 </span>
                 <span className="key-row__tail ac-mediarow__end ac-mediarow__end--wrap">
-                  {c.endpoint ? (
-                    <Button variant="link" onClick={() => setDialog({ type: "models", cred: c })}>
-                      {t("endpoint.models")}
-                    </Button>
-                  ) : isDefault ? (
+                  {isDefault ? (
                     <Chip icon="check">{t("settings.default")}</Chip>
                   ) : (
                     <Button
@@ -929,6 +927,11 @@ function KeysSection() {
                       onClick={() => updateSettings.mutate({ defaultCredentialId: c.id })}
                     >
                       {t("settings.makeDefault")}
+                    </Button>
+                  )}
+                  {c.endpoint && (
+                    <Button variant="link" onClick={() => setDialog({ type: "models", cred: c })}>
+                      {t("endpoint.models")}
                     </Button>
                   )}
                   <Menu
@@ -990,7 +993,17 @@ function KeysSection() {
         open={dialog?.type === "remove"}
         onOpenChange={(o) => !o && setDialog(null)}
         title={t("settings.removeTitle", { label: dialog?.type === "remove" ? dialog.cred.label : "" })}
-        description={dialog?.type === "remove" ? keyRemovalText(t, dialog.cred, all, platform.data === true) : ""}
+        description={
+          dialog?.type === "remove"
+            ? keyRemovalText(
+                t,
+                dialog.cred,
+                all,
+                platform.data === true,
+                decisions.isSuccess ? decisions.data.settings?.credentialId === dialog.cred.id : undefined,
+              )
+            : ""
+        }
         closeLabel={t("common.close")}
         width={440}
       >

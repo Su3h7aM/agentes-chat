@@ -1,6 +1,7 @@
 import { usdToNanoUsd } from "@agenteschat/providers";
 import { cutText } from "./format";
-import { callJev, type JevKeySource, JevOffError } from "./jev-key";
+import { callJev, type JevKeySource, JevOffError, type JevTarget, type JevTransport } from "./jev-key";
+import { type JudgeQuestion, validateJudgeAnswers } from "./judge";
 import {
   asksAddressee,
   ROUTER_MESSAGE_CHARS,
@@ -37,7 +38,11 @@ export interface JevUsage {
   inputTokens: number;
   outputTokens: number;
   /** What the call cost, from `jevCostOf`. */
-  costNanoUsd: number;
+  costNanoUsd?: number;
+  /** `typesafe`, `openrouter-decisions` or a custom endpoint's decision route. */
+  provider?: string;
+  /** Set when a workspace's own credential paid, which also bills the row to the org. */
+  credentialId?: string;
 }
 
 /**
@@ -46,6 +51,30 @@ export interface JevUsage {
  */
 export const JEV_NANO_USD_PER_INPUT_TOKEN = 42;
 export const jevCostNanoUsd = (inputTokens: number) => Math.round(inputTokens * JEV_NANO_USD_PER_INPUT_TOKEN);
+
+/**
+ * What a decision call cost and which provider answered. TypeSafe reports no cost, so its published per-input-token
+ * tariff applies. OpenRouter always reports its charge, which must be finite and non-negative (zero is valid). A
+ * custom endpoint's cost is optional: what it reports is kept, and when it reports none the call records zero, since
+ * its price is not ours to know. Its tokens are recorded either way.
+ */
+export function decisionUsage(
+  transport: JevTransport | undefined,
+  usage: { input_tokens?: number; cost?: unknown } = {},
+) {
+  if (transport === "openrouter") {
+    const cost = usage.cost;
+    if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
+      throw new Error("The decision service reported an invalid cost");
+    return { provider: "openrouter-decisions", costNanoUsd: Math.round(cost * 1e9) };
+  }
+  if (transport === "systemone") {
+    const cost = usage.cost;
+    const reported = typeof cost === "number" && Number.isFinite(cost) && cost >= 0;
+    return { provider: "systemone", costNanoUsd: reported ? Math.round(cost * 1e9) : 0 };
+  }
+  return { provider: "typesafe", costNanoUsd: jevCostNanoUsd(usage.input_tokens ?? 0) };
+}
 
 /**
  * What a Jev call cost: OpenRouter's charge for it (`usage.cost`, in USD, as its models' calls record it, ADR 0087
@@ -71,17 +100,11 @@ const TEAM_CHAT = "People in a team chat mostly talk among themselves";
 const PERSONAL_CHAT =
   "Here one person (and maybe their family) mostly talks to their agents, though family members may also talk among themselves";
 
-interface JevAnswer {
-  type: "noul" | "choice" | "score";
-  noul?: number;
-  choice?: string;
-  probabilities?: Record<string, number>;
-  confidence?: number;
-}
-
 export function createJevRouterStrategy(options: {
   /** Read on every call (`jev-key.ts`): without one it throws `JevOffError`. */
   key: JevKeySource;
+  /** A workspace's own destination, resolved before each call; null keeps the installation's Jev. */
+  resolve?(orgId: string): Promise<JevTarget | null>;
   /** Records the call's usage (kind `router`, provider `typesafe`). */
   recordUsage(usage: JevUsage): Promise<void>;
   baseURL?: string;
@@ -93,6 +116,13 @@ export function createJevRouterStrategy(options: {
     name: "jev",
     on: () => typeof options.key === "string" || options.key.usable(),
     async decide(input: RoutingInput): Promise<RoutingResult> {
+      const target = (await options.resolve?.(input.orgId)) ?? {
+        key: options.key,
+        baseURL: options.baseURL,
+        model: options.model,
+        fetch: options.fetch,
+        timeoutMs: options.timeoutMs,
+      };
       const handles = input.candidates.map((c) => c.handle);
       const state = {
         channel: { name: input.channel.name, topic: input.channel.topic || null, direct_message: false },
@@ -112,7 +142,7 @@ export function createJevRouterStrategy(options: {
           can: c.can ?? null,
         })),
       };
-      const questions: Record<string, unknown> = {
+      const questions: Record<string, JudgeQuestion> = {
         needs_agent: {
           type: "noul",
           instructions: `Should any AI agent reply to \`latest_message\`? ${whoFor()} ${input.personal ? PERSONAL_CHAT : TEAM_CHAT}: an agent should reply only when the message speaks to an agent (by @, by name or by its role), asks the agents or anyone something an agent can help with ("does anyone know…", "alguém sabe…"), speaks to the agents as a group, or continues a conversation with an agent. Also yes when the person insists or complains that nobody answered ("alô???", "ninguém vai responder?", a greeting again after nobody answered the first): they want an agent's reply. Otherwise, when unsure, no.`,
@@ -193,24 +223,30 @@ export function createJevRouterStrategy(options: {
 
       const body = await callJev<{
         model?: string;
-        answers?: Record<string, JevAnswer>;
+        answers?: unknown;
         usage?: { input_tokens?: number; output_tokens?: number; cost?: number };
-      }>(options.key, {
-        fetch: options.fetch,
-        baseURL: options.baseURL,
-        body: { state, model: options.model ?? "jev-latest", questions },
-        timeoutMs: options.timeoutMs ?? 2000,
+      }>(target.key, {
+        fetch: target.fetch ?? options.fetch,
+        baseURL: target.baseURL,
+        transport: target.transport,
+        body: { state, model: target.model ?? "jev-latest", questions },
+        timeoutMs: target.timeoutMs ?? options.timeoutMs ?? 2000,
       });
+      const usage = target.transport
+        ? decisionUsage(target.transport, body.usage)
+        : { provider: "typesafe", costNanoUsd: jevCostOf(body.usage) };
       await options
         .recordUsage({
           orgId: input.orgId,
-          model: body.model ?? options.model ?? "jev-latest",
+          ...(target.credentialId ? { credentialId: target.credentialId } : {}),
+          provider: usage.provider,
+          costNanoUsd: usage.costNanoUsd,
+          model: body.model ?? target.model ?? options.model ?? "jev-latest",
           inputTokens: body.usage?.input_tokens ?? 0,
           outputTokens: body.usage?.output_tokens ?? 0,
-          costNanoUsd: jevCostOf(body.usage),
         })
         .catch(() => {});
-      const answers = body.answers ?? {};
+      const answers = validateJudgeAnswers(questions, body.answers);
       const best = answers.best_agent?.probabilities ?? {};
       const to = answers.addressee?.probabilities ?? {};
       const scored = withAddressee(

@@ -6,6 +6,7 @@ import {
   useAiStatus,
   useApi,
   useCredentials,
+  useDecisionSettings,
   useMachines,
   useMoveAccountInOrder,
   usePlatformKey,
@@ -71,6 +72,7 @@ import { errorHaptic, goBack, PushedHeader, successHaptic } from "../shared/part
 import { SheetHostProvider, useSheet } from "../shared/SheetHost";
 import { overLimit, TextArea } from "../shared/TextArea";
 import { PlanMeter } from "../usage/parts";
+import { DecisionSettingsCard } from "./DecisionSettings";
 import { openKeyForAll } from "./KeyForAllScreen";
 import { orderMoves, ownAccountRows } from "./logic";
 import { openConnectAi } from "./NoAiCard";
@@ -437,6 +439,7 @@ function AiAccounts() {
           </>
         ) : null}
         {can(org, "manage_credentials") ? <KeysSection locale={i18n.language} /> : null}
+        <DecisionSettingsCard />
         <PersonalParts />
       </ScrollView>
     </View>
@@ -521,6 +524,7 @@ function KeysSection({ locale }: { locale: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const credentials = useCredentials(orgId);
+  const decisions = useDecisionSettings(orgId);
   const settings = useSettings(orgId);
   const update = useUpdateSettings(orgId);
   const all = (credentials.data ?? []).filter((k) => !k.revokedAt);
@@ -560,20 +564,30 @@ function KeysSection({ locale }: { locale: string }) {
       />,
     );
   const remove = (k: Credential) =>
-    Alert.alert(t("settings.removeTitle", { label: k.label }), keyRemovalText(t, k, all, platform.data === true), [
-      { text: t("common.cancel"), style: "cancel" },
-      {
-        text: t("settings.remove"),
-        style: "destructive",
-        onPress: () =>
-          api.agents.removeCredential(orgId, k.id, true, true).then(() => {
-            successHaptic();
-            refetch();
-            void qc.invalidateQueries({ queryKey: keys.agents(orgId) });
-            void qc.invalidateQueries({ queryKey: keys.agentPages(orgId) });
-          }, failed),
-      },
-    ]);
+    Alert.alert(
+      t("settings.removeTitle", { label: k.label }),
+      keyRemovalText(
+        t,
+        k,
+        all,
+        platform.data === true,
+        decisions.isSuccess ? decisions.data.settings?.credentialId === k.id : undefined,
+      ),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("settings.remove"),
+          style: "destructive",
+          onPress: () =>
+            api.agents.removeCredential(orgId, k.id, true, true).then(() => {
+              successHaptic();
+              refetch();
+              void qc.invalidateQueries({ queryKey: keys.agents(orgId) });
+              void qc.invalidateQueries({ queryKey: keys.agentPages(orgId) });
+            }, failed),
+        },
+      ],
+    );
   const removeCopies = (k: Credential) =>
     Alert.alert(t("settings.removeCopiesTitle", { label: k.label }), t("settings.removeCopiesText"), [
       { text: t("common.cancel"), style: "cancel" },

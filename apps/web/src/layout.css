@@ -14279,6 +14279,7 @@ html:not([data-pointer]) .ac-typing__see:focus-visible {
 }
 .key-row {
   padding: var(--row-py) var(--space-4);
+  overflow-wrap: anywhere;
 }
 /* Their actions are small ghost buttons, 32px boxes: the name's line takes their axis, as the kit's MediaRow gives a
    plated one's, so they keep the row's padding above as the words under them keep it below. */
@@ -14312,6 +14313,46 @@ html:not([data-pointer]) .ac-typing__see:focus-visible {
   flex-direction: column;
   gap: 12px;
 }
+/* The one decision card: the provider choice, then the settings for it. */
+.jev-decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.jev-decision__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--form-gap);
+}
+.jev-decision__endpoint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.jev-decision__endpoint .ac-inlinecode {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.jev-decision__facts {
+  margin: 0;
+}
+@media (max-width: 639px) {
+  .jev-decision .ac-form__actions > .ac-btn {
+    width: 100%;
+  }
+}
+/* Jev's existing key setup inside the decision card: its own head is already the card's. */
+.jev--embedded {
+  gap: var(--space-3);
+  min-width: 0;
+}
+.jev--embedded .jev__foot {
+  padding-left: 0;
+}
 .jev:focus {
   outline: none;
 }
@@ -14323,6 +14364,11 @@ html:not([data-pointer]) .ac-typing__see:focus-visible {
 /* A fact breaks between facts, never inside one ("US$ 0,13"). */
 .jev__fact {
   white-space: nowrap;
+}
+/* A decision model id may run 200 characters with no space: the id breaks anywhere, facts stay whole. */
+.jev__id {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .jev__title {
   margin: 0;

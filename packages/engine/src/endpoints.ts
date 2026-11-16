@@ -58,16 +58,16 @@ export const endpointFetch = (net: EndpointNet): typeof fetch =>
   net.fetch ?? (net.allowPrivate ? fetch : publicHttpsFetch());
 
 /**
- * An endpoint's address as its API's SDK takes it: no query, no trailing slash, and the path the SDK adds left out
- * (`/chat/completions`; `/v1` or `/v1/messages` for Anthropic's). Without `allowPrivate`, https only and every
- * address the host resolves to public (`assertPublicHttpsUrl`; each call is checked again when it connects).
+ * The checks every endpoint address goes through before it is used: without `allowPrivate`, https only and every
+ * address the host resolves to public (`assertPublicHttpsUrl`). The address is returned as typed (trimmed), which is
+ * what a full decision URL needs; `endpointAddress` normalizes it for the chat SDKs afterwards.
  */
-export async function endpointAddress(raw: string, style: EndpointStyle, net: EndpointNet): Promise<string> {
-  if (!ENDPOINT_STYLES.includes(style)) throw new ValidationError("Pick the API the server speaks", "endpoint.style");
-  let url: URL;
+export async function validatedEndpointUrl(raw: string, net: EndpointNet): Promise<string> {
+  const address = raw.trim();
   if (net.allowPrivate) {
+    let url: URL;
     try {
-      url = new URL(raw.trim());
+      url = new URL(address);
     } catch {
       throw new ValidationError("Invalid address", "url.invalid");
     }
@@ -75,7 +75,19 @@ export async function endpointAddress(raw: string, style: EndpointStyle, net: En
       throw new ValidationError("Use an https:// or http:// address", "url.invalid");
     if (url.username || url.password)
       throw new ValidationError("The address can't have a user or password", "url.credentials");
-  } else url = await assertPublicHttpsUrl(raw.trim(), net.resolveHost);
+  } else await assertPublicHttpsUrl(address, net.resolveHost);
+  return address;
+}
+
+/**
+ * An endpoint's address as its API's SDK takes it: no query, no trailing slash, and the path the SDK adds left out
+ * (`/chat/completions`; `/v1` or `/v1/messages` for Anthropic's). The same checks as `validatedEndpointUrl` run first;
+ * each call is checked again when it connects.
+ */
+export async function endpointAddress(raw: string, style: EndpointStyle, net: EndpointNet): Promise<string> {
+  if (!ENDPOINT_STYLES.includes(style)) throw new ValidationError("Pick the API the server speaks", "endpoint.style");
+  const address = await validatedEndpointUrl(raw, net);
+  const url = new URL(address);
   const path = url.pathname.replace(/\/+$/, "");
   const base =
     style === "anthropic" ? path.replace(/\/v1(\/messages)?$/, "") : path.replace(/\/chat\/completions$/, "");

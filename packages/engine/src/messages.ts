@@ -37,7 +37,7 @@ import {
 } from "./events";
 import { cutText, inertLinks } from "./format";
 import { pictureSize } from "./image-size";
-import { type EveryoneAnswer, everyoneShape, type Judge, personMentionAddressees } from "./judge";
+import { type EveryoneAnswer, everyoneShape, type Judge, judgeName, personMentionAddressees } from "./judge";
 import { PLATFORM_CAP } from "./limits";
 import { admitFileAgents, type LiveAskSelection, type LiveRef, liveRefFor, liveRefOf } from "./live/conversation";
 import { isMediaAfterReply, isStickerMood, type MessageMedia, mediaOf, mediaSettings, type StickerMood } from "./media";
@@ -1597,14 +1597,14 @@ export async function classifyAddressees(
     const scores = targets.map((t) => ({ agentId: t.id, score: judged.get(t.id) ?? 0 }));
     const addressees = pickAddressees(scores);
     return {
-      strategy: `addressees-${judge.name}`,
+      strategy: `addressees-${await judgeName(judge, input.orgId)}`,
       scores,
       addressees,
       referenced: everyone.filter((id) => !addressees.includes(id)),
     };
   } catch (error) {
     return {
-      strategy: `addressees-${judge.name}`,
+      strategy: `addressees-${await judgeName(judge, input.orgId)}`,
       scores: everyone.map((agentId) => ({ agentId, score: 0 })),
       addressees: everyone,
       referenced: [],
@@ -1686,11 +1686,11 @@ export async function classifyEveryone(
         limit 1`),
     ).length > 0;
   const ids = targets.map((t) => t.id);
-  const decide = (answer: EveryoneAnswer, best: string, error?: string) => {
+  const decide = async (answer: EveryoneAnswer, best: string, error?: string) => {
     const by = answer === "one" && !named ? best : null;
     const runs = answer === "each" ? ids : by ? [by] : [];
     return {
-      strategy: `everyone-${judge.name}`,
+      strategy: `everyone-${await judgeName(judge, input.orgId)}`,
       scores: ids.map((agentId) => ({ agentId, score: runs.includes(agentId) ? 1 : 0 })),
       addressees: runs,
       referenced: ids.filter((id) => !runs.includes(id)),
@@ -1717,9 +1717,13 @@ export async function classifyEveryone(
         timer = setTimeout(() => reject(new Error("everyone: timed out")), options.timeoutMs ?? ADDRESSEE_TIMEOUT_MS);
       }),
     ]);
-    return decide(judged.answer ?? "one", judged.best ?? first.id, judged.answer ? undefined : "everyone: no answer");
+    return await decide(
+      judged.answer ?? "one",
+      judged.best ?? first.id,
+      judged.answer ? undefined : "everyone: no answer",
+    );
   } catch (error) {
-    return decide("one", first.id, error instanceof Error ? error.message.slice(0, 300) : String(error));
+    return await decide("one", first.id, error instanceof Error ? error.message.slice(0, 300) : String(error));
   } finally {
     if (timer) clearTimeout(timer);
   }

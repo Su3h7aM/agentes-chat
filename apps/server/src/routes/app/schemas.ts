@@ -355,7 +355,11 @@ export const Credential = z
     provider: ProviderId,
     label: z.string(),
     endpoint: z
-      .object({ style: EndpointStyle, baseURL: z.string(), models: z.array(EndpointModel) })
+      .object({
+        style: EndpointStyle,
+        baseURL: z.string(),
+        models: z.array(EndpointModel),
+      })
       .optional()
       .openapi({ description: "A workspace's own endpoint (`custom`, ADR 0146): its address, API and models." }),
     keyHint: z.string().openapi({ description: "Last 4 characters of the key. The key itself is never returned." }),
