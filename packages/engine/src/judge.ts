@@ -4,8 +4,8 @@ import { isConfidentialRun } from "./confidential";
 import { sha256 } from "./crypto";
 import { cutText } from "./format";
 import type { ModelGateway } from "./gateway";
-import { callJev, type JevKeySource } from "./jev-key";
-import { jevCostOf } from "./router-jev";
+import { callJev, type JevKeySource, type JevTransport } from "./jev-key";
+import { decisionUsage, jevCostOf } from "./router-jev";
 
 /**
  * Small semantic judgments about what people write ("is this asking the agent
@@ -91,8 +91,13 @@ export interface JudgeRequest {
 
 export interface Judge {
   name: string;
+  nameFor?(orgId: string): Promise<string>;
   ask(request: JudgeRequest): Promise<Record<string, JudgeAnswer>>;
 }
+
+/** A workspace may use its own decision account while another still falls back to the LLM. */
+export const judgeName = (judge: Judge, orgId: string): Promise<string> =>
+  judge.nameFor?.(orgId).catch(() => judge.name) ?? Promise.resolve(judge.name);
 
 /** The model call a judge made, as an error report tags it (`judgeCallOf`). */
 export interface JudgeCallTags {
@@ -126,11 +131,88 @@ const clamp = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Mat
 export const judgeSeesImages = (request: Pick<JudgeRequest, "images" | "questions">) =>
   Object.keys(request.images ?? {}).length > 0 || Object.values(request.questions).some((q) => q.type === "box");
 
-function boxOf(v: unknown): JudgeBox {
-  const b = (v ?? {}) as Partial<Record<keyof JudgeBox, unknown>>;
-  const top = clamp(b.top);
-  const left = clamp(b.left);
-  return { top, left, bottom: Math.max(top, clamp(b.bottom)), right: Math.max(left, clamp(b.right)) };
+const unit = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+
+function probabilitiesOf(id: string, raw: unknown, options: readonly string[]): Record<string, number> | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw new Error(`The decision service returned an invalid distribution for "${id}"`);
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return undefined;
+  const out: Record<string, number> = {};
+  let total = 0;
+  for (const [option, probability] of entries) {
+    if (!options.includes(option) || !unit(probability))
+      throw new Error(`The decision service returned an invalid probability for "${id}"`);
+    out[option] = probability;
+    total += probability;
+  }
+  if (total > 1 + 1e-6) throw new Error(`The decision service returned an incoherent distribution for "${id}"`);
+  return out;
+}
+
+function boxOf(id: string, raw: unknown): JudgeBox {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`Invalid box for "${id}"`);
+  const b = raw as Partial<Record<keyof JudgeBox, unknown>>;
+  if (![b.top, b.bottom, b.left, b.right].every(unit)) throw new Error(`Invalid box for "${id}"`);
+  const { top, bottom, left, right } = b as JudgeBox;
+  if (top > bottom || left > right) throw new Error(`Invalid box for "${id}"`);
+  return { top, bottom, left, right };
+}
+
+/**
+ * One decision response, read against the questions it answered: every Noul is a finite probability, every Choice
+ * names one of its options, every Score is in its levels, every Box is inside the image, and distributions are
+ * probabilities. A missing or malformed answer throws instead of becoming zero; callers then use their local fallback.
+ */
+export function validateJudgeAnswers(
+  questions: Record<string, JudgeQuestion>,
+  raw: unknown,
+): Record<string, JudgeAnswer> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw new Error("The decision service returned no typed answers");
+  const answers = raw as Record<string, unknown>;
+  const out: Record<string, JudgeAnswer> = {};
+  for (const [id, question] of Object.entries(questions)) {
+    const value = answers[id];
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      throw new Error(`The decision service returned no answer for "${id}"`);
+    const answer = value as Partial<JudgeAnswer>;
+    if (answer.confidence !== undefined && !unit(answer.confidence))
+      throw new Error(`The decision service returned an invalid confidence for "${id}"`);
+    const confidence = answer.confidence === undefined ? {} : { confidence: answer.confidence };
+    if (question.type === "noul") {
+      if (!unit(answer.noul)) throw new Error(`The decision service returned an invalid Noul for "${id}"`);
+      out[id] = { noul: answer.noul };
+    } else if (question.type === "box") {
+      out[id] = { box: boxOf(id, answer.box), ...confidence };
+    } else if (question.type === "score") {
+      const highest = question.criteria.length - 1;
+      const score = answer.score;
+      if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > highest)
+        throw new Error(`The decision service returned an invalid Score for "${id}"`);
+      out[id] = {
+        score,
+        probabilities:
+          probabilitiesOf(
+            id,
+            answer.probabilities,
+            question.criteria.map((_, i) => String(i)),
+          ) ?? {},
+        ...confidence,
+      };
+    } else {
+      const options = Object.keys(question.criteria);
+      const choice = answer.choice;
+      if (typeof choice !== "string" || !options.includes(choice))
+        throw new Error(`The decision service returned an invalid Choice for "${id}"`);
+      const probabilities = probabilitiesOf(id, answer.probabilities, options);
+      if (probabilities && !(choice in probabilities))
+        throw new Error(`The decision service returned an incoherent Choice for "${id}"`);
+      out[id] = { choice, probabilities: probabilities ?? {}, ...confidence };
+    }
+  }
+  return out;
 }
 
 /**
@@ -149,6 +231,9 @@ export function createJevJudge(options: {
   visionModel?: string;
   /** Images make a request bigger and slower: its own timeout (default 6 s). */
   visionTimeoutMs?: number;
+  /** Explicit destination for a workspace's own credential; absent: inferred from the key's prefix. */
+  transport?: JevTransport;
+  credentialId?: string;
   fetch?: typeof fetch;
 }): Judge {
   const call = async (request: JudgeRequest, vision: boolean): Promise<Record<string, JudgeAnswer>> => {
@@ -166,6 +251,7 @@ export function createJevJudge(options: {
     }>(options.key, {
       fetch: options.fetch,
       baseURL: options.baseURL,
+      transport: options.transport,
       // Images and Box questions are off unless asked for on each request.
       headers: vision ? { "TypeSafe-Danger-Zone-Images": "true" } : undefined,
       body: {
@@ -178,8 +264,19 @@ export function createJevJudge(options: {
         ? (options.visionTimeoutMs ?? Math.max(6000, options.timeoutMs ?? 0))
         : (request.timeoutMs ?? options.timeoutMs ?? 2000),
     }).catch((error: unknown) => {
-      throw withJudgeCall(error, model, "typesafe");
+      throw withJudgeCall(
+        error,
+        model,
+        options.transport === "openrouter"
+          ? "openrouter-decisions"
+          : options.transport === "systemone"
+            ? "systemone"
+            : "typesafe",
+      );
     });
+    const used = options.transport
+      ? decisionUsage(options.transport, body.usage)
+      : { provider: "typesafe", costNanoUsd: jevCostOf(body.usage) };
     const inputTokens = body.usage?.input_tokens ?? 0;
     request.onUsage?.({ inputTokens, outputTokens: body.usage?.output_tokens ?? 0 });
     await options.gateway
@@ -188,39 +285,22 @@ export function createJevJudge(options: {
         agentId: request.agentId,
         runId: request.runId,
         kind: "router",
-        provider: "typesafe",
+        credentialId: options.credentialId,
+        provider: used.provider,
         model: body.model ?? model,
         requestedModel: request.kind,
         inputTokens,
         outputTokens: body.usage?.output_tokens ?? 0,
-        costNanoUsd: jevCostOf(body.usage),
+        costNanoUsd: used.costNanoUsd,
       })
       .catch(() => {});
-    const out: Record<string, JudgeAnswer> = {};
-    for (const [id, q] of Object.entries(request.questions)) {
-      const a = body.answers?.[id];
-      const confidence = typeof a?.confidence === "number" ? { confidence: clamp(a.confidence) } : {};
-      if (q.type === "noul") out[id] = { noul: clamp(a?.noul) };
-      else if (q.type === "box") out[id] = { box: boxOf(a?.box), ...confidence };
-      else if (q.type === "score") {
-        out[id] = {
-          score: typeof a?.score === "number" ? Math.min(q.criteria.length - 1, Math.max(0, a.score)) : 0,
-          probabilities: a?.probabilities ?? {},
-          ...confidence,
-        };
-      } else {
-        out[id] = {
-          choice: typeof a?.choice === "string" ? a.choice : undefined,
-          probabilities: a?.probabilities ?? {},
-          ...confidence,
-        };
-      }
-    }
-    return out;
+    return validateJudgeAnswers(request.questions, body.answers);
   };
   const textCall = (request: JudgeRequest) =>
     caches.jevAnswers.getOrLoad(
-      `${request.orgId}:${sha256(JSON.stringify([options.model ?? "", request.state, request.questions]))}`,
+      `${request.orgId}:${sha256(
+        JSON.stringify([options.credentialId, options.transport, options.model, request.state, request.questions]),
+      )}`,
       () => call(request, false),
     ) as Promise<Record<string, JudgeAnswer>>;
   return {
@@ -473,6 +553,7 @@ export function withJudgeBudget(judge: Judge, budgetMs: number, slow: { timedOut
     get name() {
       return judge.name;
     },
+    nameFor: (orgId) => judgeName(judge, orgId),
     async ask(request) {
       if (slow.timedOut) throw new JudgeBudgetError();
       until ??= Date.now() + budgetMs;

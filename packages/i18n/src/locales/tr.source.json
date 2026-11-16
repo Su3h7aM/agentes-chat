@@ -26917,6 +26917,174 @@
   "jev.openRouter.line.envInvalid": {
     "value": "OpenRouter didn't accept this key. Change it in this server's settings (`TYPESAFE_API_KEY`)."
   },
+  "jev.decision.provider": {
+    "value": "Decision provider"
+  },
+  "jev.decision.jevTypeSafe": {
+    "value": "Jev (TypeSafe)"
+  },
+  "jev.decision.custom": {
+    "value": "Custom"
+  },
+  "jev.decision.about": {
+    "value": "These models help choose who replies, organize memory, and understand screenshots."
+  },
+  "jev.decision.jevManaged": {
+    "value": "Jev is set up by this server's owner."
+  },
+  "jev.decision.jevMobile": {
+    "value": "Jev's key is managed in the web app. Decisions use the installation setup."
+  },
+  "jev.decision.unknownAccount": {
+    "value": "Account unavailable"
+  },
+  "jev.decision.accountGone": {
+    "value": "This account was removed or revoked. Choose another account to save."
+  },
+  "jev.decision.vision": {
+    "value": "With vision: {{model}}"
+  },
+  "jev.decision.visionLabel": {
+    "value": "Vision model"
+  },
+  "jev.decision.noVision": {
+    "value": "No vision"
+  },
+  "jev.decision.unavailable": {
+    "value": "The chosen account is unavailable. Choose another or go back to the installation's Jev."
+  },
+  "jev.decision.unavailableOption": {
+    "value": "Unavailable"
+  },
+  "jev.decision.account": {
+    "value": "Account"
+  },
+  "jev.decision.chooseAccount": {
+    "value": "Choose an account"
+  },
+  "jev.decision.model": {
+    "value": "Decision model"
+  },
+  "jev.decision.modelInvalid": {
+    "value": "Choose a valid model id."
+  },
+  "jev.decision.modelPlaceholder": {
+    "value": "e.g. vendor/decision-1"
+  },
+  "jev.decision.modelId": {
+    "value": "Model ID"
+  },
+  "jev.decision.visionModelId": {
+    "value": "Vision model ID"
+  },
+  "jev.decision.visionHelp": {
+    "value": "Images and Box questions. Empty turns them off in this workspace."
+  },
+  "jev.decision.visionPlaceholder": {
+    "value": "Optional"
+  },
+  "jev.decision.saved": {
+    "value": "Saved. The test passed."
+  },
+  "jev.decision.testing": {
+    "value": "Testing and saving…"
+  },
+  "jev.decision.save": {
+    "value": "Test and save"
+  },
+  "jev.decision.active": {
+    "value": "Active: {{account}} · {{model}}"
+  },
+  "jev.decision.noOpenRouter": {
+    "value": "No OpenRouter key in this workspace."
+  },
+  "jev.decision.noCustom": {
+    "value": "No custom endpoint in this workspace."
+  },
+  "jev.decision.addInKeys": {
+    "value": "Add one in Provider keys above."
+  },
+  "jev.decision.otherModel": {
+    "value": "Other model…"
+  },
+  "jev.decision.advanced": {
+    "value": "Advanced"
+  },
+  "jev.decision.fullEndpoint": {
+    "value": "Full endpoint (optional)"
+  },
+  "jev.decision.fullEndpointHelp": {
+    "value": "Leave empty to use the address derived from this key. Use it only when the service answers somewhere else."
+  },
+  "jev.decision.endpointExample": {
+    "value": "e.g. {{endpoint}}"
+  },
+  "jev.decision.endpointExampleEmpty": {
+    "value": "Derived from the key's address."
+  },
+  "jev.decision.requestsTo": {
+    "value": "Requests go to"
+  },
+  "jev.decision.derivedEndpoint": {
+    "value": "Derived from this key's address. A full endpoint in Advanced overrides it."
+  },
+  "jev.decision.testNotice": {
+    "value": "Saving checks the models with small requests to the provider. Changes apply to this workspace immediately."
+  },
+  "jev.decision.reset.action": {
+    "value": "Use installation's Jev"
+  },
+  "jev.decision.reset.title": {
+    "value": "Go back to the installation's Jev?"
+  },
+  "jev.decision.reset.text": {
+    "value": "This workspace stops using its own decision account. Jev keeps the same setup for everyone else."
+  },
+  "jev.decision.reset.confirm": {
+    "value": "Use installation's Jev"
+  },
+  "jev.decision.error.model": {
+    "value": "Choose a valid decision model ID."
+  },
+  "jev.decision.error.account": {
+    "value": "Choose an active account from this workspace."
+  },
+  "jev.decision.error.endpoint": {
+    "value": "A full endpoint only applies to a Custom decision account. Clear it to use Jev or OpenRouter."
+  },
+  "jev.decision.error.check": {
+    "value": "The decision service couldn't verify this model. Try again."
+  },
+  "jev.decision.error.unreachable": {
+    "value": "This server couldn't reach the address. Check the address and that the endpoint is online."
+  },
+  "jev.decision.error.timeout": {
+    "value": "The endpoint didn't answer in time. Check that it answers quickly, then try again."
+  },
+  "jev.decision.error.refused": {
+    "value": "The endpoint refused this account's key. Check the key under Provider keys."
+  },
+  "jev.decision.error.noCredit": {
+    "value": "This account has no credit left at the endpoint."
+  },
+  "jev.decision.error.noRoute": {
+    "value": "The endpoint has no decision route at this address. Check the address."
+  },
+  "jev.decision.error.rateLimited": {
+    "value": "The endpoint is limiting requests right now. Try again in a moment."
+  },
+  "jev.decision.error.endpointError": {
+    "value": "The endpoint failed on its side. Try again later."
+  },
+  "jev.decision.error.requestRefused": {
+    "value": "The endpoint refused the request. Check the model ID."
+  },
+  "jev.decision.error.format": {
+    "value": "The endpoint answered, but not in the decision format. Its decision route must answer in that format."
+  },
+  "jev.decision.error.vision": {
+    "value": "The endpoint answered the text question but gave no box for the image. Choose a vision model that accepts images, or none."
+  },
   "jev.remove.title": {
     "value": "Remove the Jev key?"
   },
@@ -45786,6 +45954,9 @@
   "settings.keyInUse": {
     "value": "{{agents}} still think with this key."
   },
+  "settings.keyDecisionInUse": {
+    "value": "This key chooses the workspace's decision model. Choose another or turn it off first."
+  },
   "settings.keyManagement": {
     "value": "This is a management key. Create a regular API key."
   },
@@ -45881,6 +46052,12 @@
       "one": "{{agents}} thinks with this key and has nothing else. Once it's gone, it stops answering until you connect another AI.",
       "other": "{{agents}} think with this key and have nothing else. Once it's gone, they stop answering until you connect another AI."
     }
+  },
+  "settings.removeDecisionInUse": {
+    "value": "It also chooses this workspace's decision model, so that choice turns off and the installation's Jev comes back."
+  },
+  "settings.removeDecisionUnknown": {
+    "value": "If it chooses this workspace's decision model, that choice turns off too."
   },
   "settings.noKeys": {
     "value": "With an API key, you pay the provider directly and choose the models."

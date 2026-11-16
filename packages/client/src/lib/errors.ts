@@ -361,6 +361,22 @@ const KNOWN = {
   human_check_blocked: "errors.humanCheckBlocked",
   // TypeSafe refused the key pasted for Jev: said under its field, nothing kept.
   jev_key_invalid: "jev.steps.invalid",
+  // A workspace's own decision model (ADR 0195): a bad id, a gone account, or a probe that didn't pass.
+  decision_model_invalid: "jev.decision.error.model",
+  decision_account_invalid: "jev.decision.error.account",
+  decision_check_failed: "jev.decision.error.check",
+  // A probe's refusal names its side: this server, the endpoint, or its answer (`probeCodeOf`, ADR 0195).
+  decision_check_unreachable: "jev.decision.error.unreachable",
+  decision_check_timeout: "jev.decision.error.timeout",
+  decision_check_refused: "jev.decision.error.refused",
+  decision_check_no_credit: "jev.decision.error.noCredit",
+  decision_check_no_route: "jev.decision.error.noRoute",
+  decision_check_rate_limited: "jev.decision.error.rateLimited",
+  decision_check_endpoint_error: "jev.decision.error.endpointError",
+  decision_check_request_refused: "jev.decision.error.requestRefused",
+  decision_check_format: "jev.decision.error.format",
+  decision_check_vision: "jev.decision.error.vision",
+  decision_endpoint_unsupported: "errors.said.checkAddress",
   // GIPHY refused the key pasted for GIFs (ADR 0091): said under its field, nothing kept.
   gif_key_invalid: "settings.media.giphy.invalid",
   // A key's test call on save: nothing kept (`keyRefusal` adds the provider's words and where to fix it).
@@ -370,6 +386,7 @@ const KNOWN = {
   provider_key_management: "settings.keyManagement",
   "credential.in_use": "settings.keyInUse",
   "credential.default": "settings.removeDefaultBlocked",
+  "credential.decision_in_use": "settings.keyDecisionInUse",
   "github.repo_missing": "errors.github.repoMissing",
   "github.ref_missing": "errors.github.refMissing",
   // `count`: minutes until GitHub stops limiting the server.

@@ -42,6 +42,18 @@ test("removing a key says what happens to the agents on it, before it happens", 
   expect(keyRemovalText(t, two, [{ id: "k1" }], false)).toContain("think with this key and have nothing else");
 });
 
+test("removing a key that chooses the decision model says that choice turns off, never for another key", () => {
+  const key = { id: "k1", usedBy: [] };
+  expect(keyRemovalText(t, key, [{ id: "k1" }], false, true)).toContain(
+    "It also chooses this workspace's decision model",
+  );
+  expect(keyRemovalText(t, key, [{ id: "k1" }], false, false)).not.toContain("decision model");
+  // A screen that couldn't read the choice yet says it may turn off instead of promising it stays.
+  expect(keyRemovalText(t, key, [{ id: "k1" }], false, undefined)).toContain(
+    "If it chooses this workspace's decision model",
+  );
+});
+
 test("the right hand's words say which of its AIs moved", () => {
   expect(thinksWithLine(t, "workspace", "Lodi", "OpenAI")).toBe(
     "Lodi now thinks with OpenAI for everyone without a plan of their own.",

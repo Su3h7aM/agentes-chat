@@ -1,5 +1,5 @@
 import type { KeyWrapper } from "@agenteschat/adapters";
-import { and, type Database, type Executor, eq, gte, schema, sql } from "@agenteschat/db";
+import { and, type Database, type Executor, eq, gte, inArray, schema, sql } from "@agenteschat/db";
 import { type AuditEntry, auditEveryOrg } from "./audit";
 import { openSecret, sealSecret } from "./crypto";
 import { ConflictError, ValidationError } from "./errors";
@@ -22,6 +22,8 @@ export type JevShownState = "off" | "ok" | "invalid" | "no_credit";
 
 /** Where Jev is called and paid: TypeSafe's own API, or OpenRouter with an OpenRouter key (ADR 0073 §9). */
 export type JevVia = "typesafe" | "openrouter";
+/** The wire protocol a decision call speaks: the two Jev routes, or a workspace's custom endpoint at `/systemone`. */
+export type JevTransport = JevVia | "systemone";
 
 /** OpenRouter's keys start with `sk-or-` (`sk-or-v1-…`); any other key is TypeSafe's. */
 export const jevViaOf = (key: string): JevVia => (key.startsWith("sk-or-") ? "openrouter" : "typesafe");
@@ -31,7 +33,11 @@ export const jevViaOf = (key: string): JevVia => (key.startsWith("sk-or-") ? "op
  * (OpenRouter has no preview alias); a release such as `jev-1.14` to `typesafe/jev-1.14`.
  */
 export const openRouterJevModel = (model: string) =>
-  model === "jev-latest" || model === "jev-preview" ? "~typesafe/jev-latest" : `typesafe/${model}`;
+  model.includes("/")
+    ? model
+    : model === "jev-latest" || model === "jev-preview"
+      ? "~typesafe/jev-latest"
+      : `typesafe/${model}`;
 
 const OPENROUTER_URL = "https://openrouter.ai";
 /** OpenRouter's attribution: the product, never a self-hosted server's own address (as for its models, ADR 0087 §5). */
@@ -67,6 +73,19 @@ export interface JevKey {
 /** A fixed key (evals, tests), or the installation's. */
 export type JevKeySource = string | Pick<JevKey, "key" | "report" | "usable">;
 
+/** One workspace's decision source; resolved before each call so settings and credential changes apply live. */
+export interface JevTarget {
+  key: JevKeySource;
+  transport?: JevTransport;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  /** TypeSafe's base URL, OpenRouter's fixed route, or a custom endpoint's decision URL. */
+  baseURL?: string;
+  model?: string;
+  visionModel?: string | null;
+  credentialId?: string;
+}
+
 /** No Jev key to call with now: the next step decides. */
 export class JevOffError extends Error {
   constructor() {
@@ -97,7 +116,7 @@ const KEY_SHAPE = /^[\x21-\x7E]+$/;
  * its moderation flagged (the request's fault), and a 404 an outage: its alpha route or Jev's name there moved, and
  * every call would fail the same way.
  */
-export function jevStateOf(status: number, body?: unknown, via: JevVia = "typesafe"): JevState | null {
+export function jevStateOf(status: number, body?: unknown, via: JevTransport = "typesafe"): JevState | null {
   if (status >= 200 && status < 300) return "ok";
   const b = body as
     | { detail?: { error_type?: unknown; message?: unknown } | string; error?: { message?: unknown } }
@@ -113,6 +132,7 @@ export function jevStateOf(status: number, body?: unknown, via: JevVia = "typesa
     if (status === 403 && /flagged|moderation/i.test(words)) return null;
     if (status === 404) return "down";
   }
+  if (via === "systemone" && status === 404) return "down";
   // 403 is TypeSafe's answer to a request without a key (probed 2026-10-26), and OpenRouter's to a key it won't serve.
   if (status === 401 || status === 403) return "invalid";
   if (status === 429) return "rate_limited";
@@ -128,6 +148,8 @@ export interface JevCall {
   headers?: Record<string, string>;
   fetch?: typeof fetch;
   baseURL?: string;
+  /** Explicit destination. Absent: inferred from the key's prefix, as before custom endpoints existed. */
+  transport?: JevTransport;
 }
 
 /**
@@ -136,18 +158,28 @@ export interface JevCall {
  * deadline passed or the answer is the request's fault.
  */
 async function systemOne(apiKey: string, call: JevCall) {
-  const via = jevViaOf(apiKey);
-  const openRouter = via === "openrouter";
-  const url = openRouter
-    ? `${OPENROUTER_URL}/api/alpha/decisions`
-    : `${(call.baseURL ?? "https://api.typesafe.ai").replace(/\/$/, "")}/v1/systemone`;
+  const transport = call.transport ?? jevViaOf(apiKey);
+  const openRouter = transport === "openrouter";
+  const custom = transport === "systemone";
+  if (custom && !call.baseURL) throw new Error("The System One endpoint has no URL");
+  const url = custom
+    ? (call.baseURL as string)
+    : openRouter
+      ? `${OPENROUTER_URL}/api/alpha/decisions`
+      : `${(call.baseURL ?? "https://api.typesafe.ai").replace(/\/$/, "")}/v1/systemone`;
   const auth = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
   let res: Response;
   try {
     res = await (call.fetch ?? fetch)(url, {
       method: "POST",
       headers: openRouter ? { ...auth, ...OPENROUTER_HEADERS } : { ...auth, ...call.headers },
-      body: JSON.stringify(openRouter ? { ...call.body, model: openRouterJevModel(call.body.model) } : call.body),
+      // Only the installation's inferred OpenRouter key uses Jev's OpenRouter names; a workspace's explicit model id
+      // is sent exactly as it saved it.
+      body: JSON.stringify(
+        openRouter && call.transport === undefined
+          ? { ...call.body, model: openRouterJevModel(call.body.model) }
+          : call.body,
+      ),
       signal: AbortSignal.timeout(call.timeoutMs),
     });
   } catch (error) {
@@ -156,12 +188,13 @@ async function systemOne(apiKey: string, call: JevCall) {
     return { state: late ? null : ("down" as const), status: 0, body: null };
   }
   const body: unknown = await res.json().catch(() => null);
-  // Usage rows keep TypeSafe's name for the release that answered (`jev-1.14-…`), never OpenRouter's slash id.
+  // The installation's Jev keeps TypeSafe's release name (`jev-1.14-…`); a workspace's explicit model keeps its id.
   const named = body as { model?: unknown } | null;
-  if (openRouter && typeof named?.model === "string") named.model = named.model.replace(/^~?typesafe\//, "");
+  if (openRouter && call.transport === undefined && typeof named?.model === "string")
+    named.model = named.model.replace(/^~?typesafe\//, "");
   const seconds = Number(res.headers.get("retry-after"));
   return {
-    state: jevStateOf(res.status, body, via),
+    state: jevStateOf(res.status, body, transport),
     status: res.status,
     body,
     retryAfterMs: seconds > 0 ? seconds * 1000 : undefined,
@@ -176,8 +209,14 @@ export async function callJev<T>(source: JevKeySource, call: JevCall): Promise<T
   const r = await systemOne(apiKey, call);
   if (r.state) jev.report(r.state, r.retryAfterMs, apiKey);
   if (r.state !== "ok" || r.body === null) {
-    const who = jevViaOf(apiKey) === "openrouter" ? "OpenRouter" : "TypeSafe";
-    throw new Error(r.status ? `${who} answered ${r.status}` : `${who} didn't answer`);
+    const transport = call.transport ?? jevViaOf(apiKey);
+    const who =
+      transport === "openrouter" ? "OpenRouter" : transport === "systemone" ? "The decision service" : "TypeSafe";
+    // The status and state travel with the error: a caller tells a refused key from a slow or unreachable service.
+    throw Object.assign(new Error(r.status ? `${who} answered ${r.status}` : `${who} didn't answer`), {
+      status: r.status,
+      state: r.state,
+    });
   }
   return r.body as T;
 }
@@ -206,7 +245,13 @@ export async function jevMonth(db: Database, now = new Date()) {
   const [row] = await db
     .select({ decisions: sql<number>`count(*)::int`, cost: sql<string>`coalesce(sum(${usageRecords.costNanoUsd}), 0)` })
     .from(usageRecords)
-    .where(and(eq(usageRecords.provider, "typesafe"), gte(usageRecords.createdAt, monthStartUtc(now))));
+    .where(
+      and(
+        inArray(usageRecords.provider, ["typesafe", "openrouter-decisions"]),
+        gte(usageRecords.createdAt, monthStartUtc(now)),
+        eq(usageRecords.billedTo, "platform"),
+      ),
+    );
   return { decisions: row?.decisions ?? 0, costNanoUsd: Number(row?.cost ?? 0) };
 }
 

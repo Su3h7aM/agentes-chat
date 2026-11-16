@@ -126,7 +126,11 @@ export function EndpointForm({
         provider: CUSTOM_PROVIDER,
         label: draft.name.trim(),
         apiKey: draft.apiKey.trim(),
-        endpoint: { style: draft.style, baseURL: draft.baseURL.trim(), models },
+        endpoint: {
+          style: draft.style,
+          baseURL: draft.baseURL.trim(),
+          models,
+        },
       },
       { onSuccess: ({ checks, ...cred }) => setSaved({ cred, checks: checks ?? [] }) },
     );

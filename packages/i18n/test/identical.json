@@ -2,6 +2,7 @@
   "app": {
     "pt-BR": [
       "surface.nudge.hours",
+      "jev.decision.jevTypeSafe",
       "live.kinds.slideCount",
       "live.shell.formats.xlsx",
       "live.shell.formats.pptx",
@@ -402,6 +403,7 @@
       "approvals.panel.admin",
       "approvals.trait.reversible",
       "apps.via",
+      "jev.decision.jevTypeSafe",
       "surface.via",
       "artifacts.formatDocx",
       "artifacts.formatOriginal",
@@ -673,6 +675,7 @@
     "fr": [
       "agentPage.facts.budget",
       "surface.nudge.hours",
+      "jev.decision.jevTypeSafe",
       "usage.kinds.routines",
       "channel.tooLong.fileName",
       "calendar.moreRuns",
@@ -1223,6 +1226,8 @@
       "storage.computer.part.system",
       "chat.consultPair.askedIn",
       "aiHub.detail.limits",
+      "jev.decision.jevTypeSafe",
+      "jev.decision.visionPlaceholder",
       "live.sheet.args.k",
       "live.sheet.args.x",
       "live.canvas.inks.orange",
@@ -1745,6 +1750,8 @@
       "agentPage.facts.budget",
       "chat.consultPair.askedIn",
       "surface.nudge.hours",
+      "jev.decision.account",
+      "jev.decision.jevTypeSafe",
       "live.sheet.args.a1",
       "live.sheet.args.k",
       "live.sheet.args.x",
@@ -2167,6 +2174,8 @@
       "agentPage.facts.budget",
       "chat.consultPair.askedIn",
       "aiHub.accounts",
+      "jev.decision.account",
+      "jev.decision.jevTypeSafe",
       "usage.kinds.routines",
       "calendar.moreRuns",
       "devices.iphone.steps.account",
@@ -2867,6 +2876,7 @@
       "integrations.badge"
     ],
     "ja": [
+      "jev.decision.jevTypeSafe",
       "live.sheet.args.k",
       "live.sheet.args.x",
       "live.slides.link.placeholder",
@@ -3060,6 +3070,7 @@
       "connectors.names.datadog_ap2"
     ],
     "ko": [
+      "jev.decision.jevTypeSafe",
       "live.sheet.args.k",
       "live.sheet.args.x",
       "live.slides.link.placeholder",
@@ -3313,6 +3324,7 @@
       "format.tokensMillions",
       "format.usd",
       "issues.pr",
+      "jev.decision.jevTypeSafe",
       "jev.title",
       "jev.via.typesafe",
       "jev.via.openrouter",
@@ -3425,6 +3437,7 @@
       "drive.folders",
       "drive.moveTo",
       "artifacts.kind.spreadsheet",
+      "jev.decision.jevTypeSafe",
       "live.kinds.spreadsheet",
       "live.slides.chart.item",
       "live.shell.formats.xlsx",
@@ -3779,6 +3792,7 @@
       "connectors.names.datadog_ap2"
     ],
     "tr": [
+      "jev.decision.jevTypeSafe",
       "live.canvas.inspector.model",
       "live.canvas.sizes.short.s",
       "live.canvas.sizes.short.m",
@@ -4117,6 +4131,7 @@
       "issues.display.field.pullRequest",
       "issues.pr",
       "issues.statusLabel",
+      "jev.decision.jevTypeSafe",
       "jev.title",
       "jev.via.typesafe",
       "jev.via.openrouter",
@@ -4364,6 +4379,7 @@
       "connectors.names.datadog_ap2"
     ],
     "ru": [
+      "jev.decision.jevTypeSafe",
       "live.canvas.sizes.short.s",
       "live.canvas.sizes.short.m",
       "live.canvas.sizes.short.l",

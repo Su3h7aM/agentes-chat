@@ -225,7 +225,19 @@ describe("existingAi: what a person already has for an agent with no AI", () => 
           claude("bia", "bia@acme.com", { mine: false, ownerId: "u_bia", email: null }),
         ],
         "own",
-        [key("k1"), key("gone", "2026-10-20T00:00:00.000Z")],
+        [
+          key("k1"),
+          key("gone", "2026-10-20T00:00:00.000Z"),
+          {
+            ...key("custom-chat"),
+            provider: "custom",
+            endpoint: {
+              style: "openai",
+              baseURL: "https://gw.example/v1",
+              models: [{ id: "chat" }],
+            },
+          },
+        ],
       ),
     ).toEqual([
       ["use", "free"],
@@ -233,6 +245,7 @@ describe("existingAi: what a person already has for an agent with no AI", () => 
       ["also", "plus"],
       ["again", "out"],
       ["key", "k1"],
+      ["key", "custom-chat"],
       ["locked", "bia"],
     ]);
   });

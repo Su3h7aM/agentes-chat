@@ -124,6 +124,7 @@ export * from "./databases/guard";
 export * from "./databases/identifiers";
 export * from "./databases/policies";
 export * from "./databases/tools";
+export * from "./decision-settings";
 export * from "./desktop";
 export * from "./desktop/person-apps";
 export * from "./desktop/pointer";

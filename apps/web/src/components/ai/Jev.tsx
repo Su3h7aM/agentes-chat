@@ -38,6 +38,7 @@ import { useTranslation } from "react-i18next";
 import { HelpLink } from "@/components/HelpLink";
 import { useOrg } from "@/components/org-context";
 import { OpenPage, Step, StepTitle } from "./AddAccountFlow";
+import { DecisionModels } from "./DecisionModels";
 
 /*
  * Who picks the agents for a message nobody mentioned (ADR 0074), and Jev on a self-hosted server (ADR 0073):
@@ -229,7 +230,7 @@ export function WhoPicksSection() {
   const status = useAiStatus(org.id, admin || Boolean(jev.data));
   const modelLabel = useModelLabel();
   const line = admin ? routingLineOf(status.data, modelLabel) : null;
-  if (!line && !jev.data) return null;
+  if (!line && !jev.data && !admin) return null;
   return (
     <Card aria-labelledby="sec-routing" className="who-card">
       <CardHeader
@@ -240,7 +241,8 @@ export function WhoPicksSection() {
       />
       {line && <p className="who-line">{t(line.key, line.params)}</p>}
       {line && status.data?.reflection === false && <p className="who-line">{t("routing.reflectionOff")}</p>}
-      {jev.data && <JevCard routing={status.data?.routing?.by} />}
+      {jev.data && !admin && <JevCard routing={status.data?.routing?.by} />}
+      {admin && <DecisionModels routing={status.data?.routing?.by} />}
     </Card>
   );
 }
@@ -258,9 +260,10 @@ const CHIP: Record<
 /**
  * Jev's key: why it helps and the steps while there's none; the key's last 4, this month's use and its state once set.
  * Setting it up (or replacing it) asks where Jev is paid: TypeSafe, or OpenRouter, where an OpenRouter key the
- * workspace already has turns it on with one press.
+ * workspace already has turns it on with one press. `embedded` leaves out the section heading when another card
+ * already names the choice.
  */
-function JevCard({ routing }: { routing?: AiRouting["by"] }) {
+export function JevSettings({ routing, embedded = false }: { routing?: AiRouting["by"]; embedded?: boolean }) {
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
   // Read here rather than handed down: a save or a removal shows its key at once, so focus lands on what stays.
@@ -485,60 +488,39 @@ function JevCard({ routing }: { routing?: AiRouting["by"] }) {
       t("jev.month", { count: view.month.decisions, cost: formatUsd(i18n.language, view.month.costUsd) }),
   ].filter(Boolean);
 
-  return (
-    <section id="jev" ref={box} tabIndex={-1} className="jev" aria-labelledby="jev-title">
-      <List>
-        <div className="ac-list__row jev__head ac-mediarow ac-mediarow--row">
-          <span className="ac-mediarow__face">
-            <ProviderLogo id="typesafe" size="sm" />
-          </span>
-          <span className="ac-mediarow__head">
-            <span className="ac-hintline">
-              <h3 id="jev-title" className="jev__title">
-                {t("jev.title")}
-              </h3>
-              <InfoHint name={t("common.about", { label: t("jev.title") })}>{t("jev.about")}</InfoHint>
-            </span>
-          </span>
-          <span className="ac-mediarow__end">
-            <Chip icon={chip.icon} tone={chip.tone}>
-              {t(`jev.state.${chip.word}`)}
-            </Chip>
-          </span>
-          <span className="ac-mediarow__body small muted">{t("jev.lead")}</span>
+  const content = (
+    <>
+      {view.source === null ? (
+        <div className="ac-list__row jev__body">
+          <JevWhy routing={routing} />
+          {steps ? (
+            chooser(false)
+          ) : (
+            <Button ref={opener} size="sm" variant="primary" onClick={() => open("set")}>
+              {t("jev.setUp")}
+            </Button>
+          )}
         </div>
-        {view.source === null ? (
-          <div className="ac-list__row jev__body">
-            <JevWhy routing={routing} />
-            {steps ? (
-              chooser(false)
-            ) : (
-              <Button ref={opener} size="sm" variant="primary" onClick={() => open("set")}>
-                {t("jev.setUp")}
-              </Button>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="ac-list__row jev__key">
-              <span className="list-col">
-                <span className="ai-accounts__name">{t(openRouter ? "jev.openRouter.keyName" : "jev.keyName")}</span>
-                <span className="small muted">
-                  {facts.map((fact, i) => (
-                    <Fragment key={String(fact)}>
-                      {i > 0 && " · "}
-                      <span className="jev__fact">{fact}</span>
-                    </Fragment>
-                  ))}
-                </span>
-                {note && <SettingNote icon={view.state === "ok" ? "info" : "alert"}>{codeAndBold(note)}</SettingNote>}
+      ) : (
+        <>
+          <div className="ac-list__row jev__key">
+            <span className="list-col">
+              <span className="ai-accounts__name">{t(openRouter ? "jev.openRouter.keyName" : "jev.keyName")}</span>
+              <span className="small muted">
+                {facts.map((fact, i) => (
+                  <Fragment key={String(fact)}>
+                    {i > 0 && " · "}
+                    <span className="jev__fact">{fact}</span>
+                  </Fragment>
+                ))}
               </span>
-              {actions && <span className="ac-acts ac-captail">{actions}</span>}
-            </div>
-            {steps === "replace" && <div className="ac-list__row jev__body">{chooser(true)}</div>}
-          </>
-        )}
-      </List>
+              {note && <SettingNote icon={view.state === "ok" ? "info" : "alert"}>{codeAndBold(note)}</SettingNote>}
+            </span>
+            {actions && <span className="ac-acts ac-captail">{actions}</span>}
+          </div>
+          {steps === "replace" && <div className="ac-list__row jev__body">{chooser(true)}</div>}
+        </>
+      )}
       <p className="jev__foot">
         <HelpLink slug="jev">{t("jev.how")}</HelpLink>
       </p>
@@ -569,6 +551,49 @@ function JevCard({ routing }: { routing?: AiRouting["by"] }) {
           </Button>
         </DialogFooter>
       </Dialog>
+    </>
+  );
+  if (embedded) {
+    return (
+      <div
+        ref={(el) => {
+          box.current = el;
+        }}
+        tabIndex={-1}
+        className="jev jev--embedded"
+      >
+        {content}
+      </div>
+    );
+  }
+  return (
+    <section id="jev" ref={box} tabIndex={-1} className="jev" aria-labelledby="jev-title">
+      <List>
+        <div className="ac-list__row jev__head ac-mediarow ac-mediarow--row">
+          <span className="ac-mediarow__face">
+            <ProviderLogo id="typesafe" size="sm" />
+          </span>
+          <span className="ac-mediarow__head">
+            <span className="ac-hintline">
+              <h3 id="jev-title" className="jev__title">
+                {t("jev.title")}
+              </h3>
+              <InfoHint name={t("common.about", { label: t("jev.title") })}>{t("jev.about")}</InfoHint>
+            </span>
+          </span>
+          <span className="ac-mediarow__end">
+            <Chip icon={chip.icon} tone={chip.tone}>
+              {t(`jev.state.${chip.word}`)}
+            </Chip>
+          </span>
+          <span className="ac-mediarow__body small muted">{t("jev.lead")}</span>
+        </div>
+        {content}
+      </List>
     </section>
   );
+}
+
+function JevCard({ routing }: { routing?: AiRouting["by"] }) {
+  return <JevSettings routing={routing} />;
 }

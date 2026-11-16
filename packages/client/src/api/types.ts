@@ -970,7 +970,11 @@ export interface Credential {
   /** Last characters of the Anthropic workspace the key is scoped to, if set. */
   workspaceIdHint?: string | null;
   /** `custom` (ADR 0146): the endpoint's address, API and models. */
-  endpoint?: { style: EndpointStyle; baseURL: string; models: EndpointModel[] };
+  endpoint?: {
+    style: EndpointStyle;
+    baseURL: string;
+    models: EndpointModel[];
+  };
   /** The agents that think with it, in a list of keys: what removing it would change. */
   usedBy?: { id: string; name: string }[];
   /** On a key just saved: `ok` a real call passed, `unchecked` the provider didn't say. */
@@ -9423,7 +9427,6 @@ export interface PhoneDeviceInput {
   name?: string;
   audience?: DeviceAudience;
 }
-
 /** An integration app (ADR 0251) as Settings › Integrations lists it. Its token is never shown again. */
 export interface IntegrationApp {
   id: string;
@@ -9454,4 +9457,23 @@ export interface IntegrationAppSecrets {
   app: IntegrationApp;
   token?: string;
   webhookSecret?: string | null;
+}
+
+/** A workspace's decision models on an existing provider credential. The key never leaves the server. */
+export interface DecisionSettings {
+  credentialId: string;
+  model: string;
+  /** Null: no image or Box judgments for this workspace. */
+  visionModel: string | null;
+  /**
+   * A custom endpoint's complete decision URL. Absent: derived from the endpoint's base.
+   * Never set for OpenRouter, which decides at its own route.
+   */
+  endpoint?: string;
+}
+
+export interface DecisionSettingsView {
+  settings: DecisionSettings | null;
+  /** The chosen credential is live and can reach a decision route. */
+  available: boolean;
 }

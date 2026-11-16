@@ -40,6 +40,7 @@ export const keys = {
   teamTemplates: (orgId: string, locale: string) => ["org", orgId, "team-templates", locale] as const,
   team: (orgId: string) => ["org", orgId, "team"] as const,
   credentials: (orgId: string) => ["org", orgId, "credentials"] as const,
+  decisions: (orgId: string) => ["org", orgId, "credentials", "decisions"] as const,
   /** Under `credentials`: a key added, rotated or removed refreshes it too. */
   aiStatus: (orgId: string) => ["org", orgId, "credentials", "ai-status"] as const,
   usage: (orgId: string) => ["org", orgId, "usage"] as const,

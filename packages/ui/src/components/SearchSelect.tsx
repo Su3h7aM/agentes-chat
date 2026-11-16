@@ -129,8 +129,24 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
       ),
     );
   }, [open]);
+  // Opening brings the whole popup into view, once: the page moves only then, never for a choice or a key.
   useEffect(() => {
-    if (open) document.getElementById(optionId(active))?.scrollIntoView?.({ block: "nearest" });
+    if (!open) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(listId)?.parentElement?.scrollIntoView?.({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [open, listId]);
+  // Moving through the options scrolls only the list, so the page stays where it is.
+  useEffect(() => {
+    if (!open) return;
+    const option = document.getElementById(optionId(active));
+    const list = option?.closest<HTMLElement>('[role="listbox"]');
+    if (!option || !list) return;
+    const o = option.getBoundingClientRect();
+    const l = list.getBoundingClientRect();
+    if (o.top < l.top) list.scrollTop -= l.top - o.top;
+    else if (o.bottom > l.bottom) list.scrollTop += o.bottom - l.bottom;
   });
 
   const pick = (o: O | undefined) => {

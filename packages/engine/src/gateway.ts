@@ -1189,6 +1189,8 @@ export function createModelGateway(deps: ModelGatewayDeps) {
       runId?: string;
       /** `agent`: a tool's own service for an agent's run (web search), never billed to its budget. */
       kind: "router" | "agent";
+      /** A workspace-owned decision credential: its calls are billed to the workspace, not the platform. */
+      credentialId?: string;
       provider: string;
       model: string;
       /** What was asked for, when it isn't the model: a Jev call's judgment (`auto_model`), so spend per judgment shows. */
@@ -1204,14 +1206,15 @@ export function createModelGateway(deps: ModelGatewayDeps) {
           agentId: input.agentId ?? null,
           runId: input.runId,
           kind: input.kind,
-          credentialId: null,
+          credentialId: input.credentialId ?? null,
           provider: input.provider,
           model: input.model,
           requestedModel: input.requestedModel ?? input.model,
-          inputTokens: input.inputTokens,
-          outputTokens: input.outputTokens,
+          // Decision APIs can report fractional token units; storage uses whole tokens and keeps the exact cost.
+          inputTokens: Math.max(0, Math.round(input.inputTokens)),
+          outputTokens: Math.max(0, Math.round(input.outputTokens)),
           costNanoUsd: input.costNanoUsd,
-          billedTo: "platform",
+          billedTo: input.credentialId ? "org" : "platform",
           createdAt: now(),
         })
         .returning({ id: usageRecords.id });

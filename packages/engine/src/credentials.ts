@@ -49,6 +49,11 @@ const { providerCredentials } = schema;
 /** Associated data binding a sealed key to its organization and row. */
 const aadFor = (orgId: string, credentialId: string) => `provider-credential|${orgId}|${credentialId}`;
 
+/** Serializes every write that can change or remove one credential (save a decision, rotate, revoke, delete). */
+export async function lockCredential(tx: Executor, orgId: string, credentialId: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`credential:${orgId}:${credentialId}`}))`);
+}
+
 /** Public view of a credential. The key itself is never returned by any API. */
 export interface CredentialSummary {
   id: string;
@@ -364,6 +369,7 @@ async function resave(
   };
   const label = input.label === PROVIDERS[input.provider].label ? row.label : input.label;
   return db.transaction(async (tx) => {
+    await lockCredential(tx, orgId, row.id);
     const [r] = await tx
       .update(providerCredentials)
       .set({ label, ...(endpoint ? { options: { ...row.options, endpoint } } : {}) })
@@ -433,25 +439,29 @@ async function setDefault(tx: Executor, orgId: string, provider: string, credent
 /** "Make default": a key becomes its provider's default for the workspace (admins). */
 export async function makeDefaultCredential(db: Database, actorId: string, orgId: string, credentialId: string) {
   await requirePermission(db, actorId, orgId, "manage_credentials");
-  const [row] = await db
-    .select()
-    .from(providerCredentials)
-    .where(
-      and(
-        eq(providerCredentials.id, credentialId),
-        eq(providerCredentials.orgId, orgId),
-        isNull(providerCredentials.revokedAt),
-      ),
-    );
-  if (!row) throw new NotFoundError("Credential not found");
-  await setDefault(db, orgId, row.provider, credentialId);
-  await auditCredential(db, orgId, actorId, "credential.default_changed", row);
+  const row = await db.transaction(async (tx) => {
+    await lockCredential(tx, orgId, credentialId);
+    const [row] = await tx
+      .select()
+      .from(providerCredentials)
+      .where(
+        and(
+          eq(providerCredentials.id, credentialId),
+          eq(providerCredentials.orgId, orgId),
+          isNull(providerCredentials.revokedAt),
+        ),
+      );
+    if (!row) throw new NotFoundError("Credential not found");
+    await setDefault(tx, orgId, row.provider, credentialId);
+    await auditCredential(tx, orgId, actorId, "credential.default_changed", row);
+    return row;
+  });
   invalidateDefaults(orgId);
   return { ...summary(row), isDefault: true };
 }
 
 /** The workspace's default keys: per provider, plus the legacy single default. */
-export async function defaultCredentials(db: Database, orgId: string) {
+export async function defaultCredentials(db: Executor, orgId: string) {
   const [row] = await db
     .select({
       id: schema.organizationSettings.defaultCredentialId,
@@ -468,7 +478,7 @@ export async function defaultCredentialId(db: Database, orgId: string) {
 }
 
 /** Removing a default key would leave its provider without one: refused unless the person said to go on (`release`). */
-async function refuseIfDefault(db: Database, orgId: string, credentialId: string) {
+async function refuseIfDefault(db: Executor, orgId: string, credentialId: string) {
   const d = await defaultCredentials(db, orgId);
   if (d.legacy === credentialId || Object.values(d.perProvider).includes(credentialId)) {
     throw new ConflictError(
@@ -476,6 +486,32 @@ async function refuseIfDefault(db: Database, orgId: string, credentialId: string
       "credential.default",
     );
   }
+}
+
+/** A decision credential is chosen by name: removing it would leave the workspace with no decision model. */
+async function refuseIfDecisionCredential(db: Executor, orgId: string, credentialId: string) {
+  const [row] = await db
+    .select({ decisions: schema.organizationSettings.decisions })
+    .from(schema.organizationSettings)
+    .where(eq(schema.organizationSettings.orgId, orgId));
+  if (row?.decisions?.credentialId === credentialId) {
+    throw new ConflictError(
+      "This key chooses the workspace's decision model. Choose another or turn it off first.",
+      "credential.decision_in_use",
+    );
+  }
+}
+
+/** The person read what happens: the workspace goes back to the installation's decision model. */
+async function dropDecisionCredential(tx: Executor, orgId: string, credentialId: string) {
+  await tx
+    .update(schema.organizationSettings)
+    .set({
+      decisions: sql`case when ${schema.organizationSettings.decisions}->>'credentialId' = ${credentialId}
+        then null else ${schema.organizationSettings.decisions} end`,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.organizationSettings.orgId, orgId));
 }
 
 /** The key stops being a default: its provider's next call takes the newest key left, as with no default set. */
@@ -574,20 +610,24 @@ async function copyGroups(keyWrappers: KeyWrapper[], rows: readonly CredentialRo
 /** Revoked keys stay stored (usage records point at them) but can no longer be decrypted for calls. */
 export async function revokeCredential(db: Database, actorId: string, orgId: string, credentialId: string) {
   await requirePermission(db, actorId, orgId, "manage_credentials");
-  await refuseIfDefault(db, orgId, credentialId);
-  const [row] = await db
-    .update(providerCredentials)
-    .set({ revokedAt: new Date() })
-    .where(
-      and(
-        eq(providerCredentials.id, credentialId),
-        eq(providerCredentials.orgId, orgId),
-        isNull(providerCredentials.revokedAt),
-      ),
-    )
-    .returning();
-  if (!row) throw new NotFoundError("Credential not found");
-  await auditCredential(db, orgId, actorId, "credential.revoked", row);
+  await db.transaction(async (tx) => {
+    await lockCredential(tx, orgId, credentialId);
+    await refuseIfDefault(tx, orgId, credentialId);
+    await refuseIfDecisionCredential(tx, orgId, credentialId);
+    const [row] = await tx
+      .update(providerCredentials)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(providerCredentials.id, credentialId),
+          eq(providerCredentials.orgId, orgId),
+          isNull(providerCredentials.revokedAt),
+        ),
+      )
+      .returning();
+    if (!row) throw new NotFoundError("Credential not found");
+    await auditCredential(tx, orgId, actorId, "credential.revoked", row);
+  });
   caches.credentials.delete(`${orgId}:${credentialId}`);
   invalidateDefaults(orgId);
 }
@@ -622,29 +662,41 @@ export async function decryptCredential(
   keyWrappers: KeyWrapper[],
   orgId: string,
   credentialId: string,
-): Promise<{
-  provider: ProviderId;
-  apiKey: string;
-  workspaceId?: string;
-  options?: { organization?: string; project?: string; endpoint?: StoredEndpoint };
-} | null> {
+): Promise<DecryptedCredential | null> {
   const row = await usableCredentialRow(db, orgId, credentialId);
   if (!row) return null;
+  return decryptCredentialRow(keyWrappers, row);
+}
+
+/** A stored credential row's key and options, decrypted. Callers that read the row themselves use this so the key
+ * they check and the version they save are the same snapshot. */
+export async function decryptCredentialRow(
+  keyWrappers: KeyWrapper[],
+  row: CredentialRow,
+): Promise<DecryptedCredential> {
   const apiKey = await openSecret(
     keyWrappers,
     { ciphertext: row.secretCiphertext, wrappedDataKey: row.wrappedDataKey, kekId: row.kekId },
-    aadFor(orgId, row.id),
+    aadFor(row.orgId, row.id),
   ).catch((error) => {
     // Permanent: a retry opens it no better, so the run fails at once saying what to do.
     if (error instanceof SealedValueError) throw new MissingCredentialError(UNREADABLE_KEY);
     throw error;
   });
+
   return {
     provider: row.provider as ProviderId,
     apiKey,
     ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
     options: row.options ?? {},
   };
+}
+
+export interface DecryptedCredential {
+  provider: ProviderId;
+  apiKey: string;
+  workspaceId?: string;
+  options?: { organization?: string; project?: string; endpoint?: StoredEndpoint };
 }
 
 /**
@@ -697,36 +749,51 @@ export async function rotateCredential(
         }),
       );
   const sealed = await sealSecret(keyWrapper, apiKey, aadFor(orgId, credentialId));
-  const endpoint = current.options.endpoint;
-  const [row] = await db
-    .update(providerCredentials)
-    .set({
-      secretCiphertext: sealed.ciphertext,
-      wrappedDataKey: sealed.wrappedDataKey,
-      kekId: sealed.kekId,
-      keyHint: apiKey.slice(-4),
-      ...values,
-      // An endpoint's address and models stay as they are. Their test calls were made with the old key, and an endpoint
-      // key's check is read from them (`verifyStoredKey`), so they are cleared until the models are tested again.
-      ...(endpoint
-        ? {
-            options: {
-              ...(values.options ?? current.options),
-              endpoint: { ...endpoint, models: endpoint.models.map(({ check: _check, ...m }) => m) },
-            },
-          }
-        : {}),
-    })
-    .where(
-      and(
-        eq(providerCredentials.id, credentialId),
-        eq(providerCredentials.orgId, orgId),
-        isNull(providerCredentials.revokedAt),
-      ),
-    )
-    .returning();
-  if (!row) throw new NotFoundError("Credential not found");
-  await auditCredential(db, orgId, actorId, "credential.key_changed", row);
+  const row = await db.transaction(async (tx) => {
+    await lockCredential(tx, orgId, credentialId);
+    const [fresh] = await tx
+      .select()
+      .from(providerCredentials)
+      .where(
+        and(
+          eq(providerCredentials.id, credentialId),
+          eq(providerCredentials.orgId, orgId),
+          isNull(providerCredentials.revokedAt),
+        ),
+      );
+    if (!fresh) throw new NotFoundError("Credential not found");
+    const endpoint = fresh.options.endpoint;
+    const [updated] = await tx
+      .update(providerCredentials)
+      .set({
+        secretCiphertext: sealed.ciphertext,
+        wrappedDataKey: sealed.wrappedDataKey,
+        kekId: sealed.kekId,
+        keyHint: apiKey.slice(-4),
+        ...values,
+        // An endpoint's address and models stay as they are. Their test calls were made with the old key, and an endpoint
+        // key's check is read from them (`verifyStoredKey`), so they are cleared until the models are tested again.
+        ...(endpoint
+          ? {
+              options: {
+                ...(values.options ?? fresh.options),
+                endpoint: { ...endpoint, models: endpoint.models.map(({ check: _check, ...m }) => m) },
+              },
+            }
+          : {}),
+      })
+      .where(
+        and(
+          eq(providerCredentials.id, credentialId),
+          eq(providerCredentials.orgId, orgId),
+          isNull(providerCredentials.revokedAt),
+        ),
+      )
+      .returning();
+    if (!updated) throw new NotFoundError("Credential not found");
+    await auditCredential(tx, orgId, actorId, "credential.key_changed", updated);
+    return updated;
+  });
   caches.credentials.delete(`${orgId}:${credentialId}`);
   invalidateDefaults(orgId);
   await passed?.record(row.id);
@@ -747,29 +814,32 @@ export async function deleteCredential(
   options: { release?: boolean } = {},
 ) {
   await requirePermission(db, actorId, orgId, "manage_credentials");
-  const users = await db
-    .select({ id: schema.agents.id, handle: schema.agents.handle, name: schema.agents.name })
-    .from(schema.agents)
-    .where(
-      and(
-        eq(schema.agents.orgId, orgId),
-        eq(schema.agents.credentialId, credentialId),
-        isNull(schema.agents.archivedAt),
-      ),
-    );
-  if (!options.release) {
-    await refuseIfDefault(db, orgId, credentialId);
-    if (users.length > 0) {
-      throw new ConflictError(
-        `In use by ${users.map((u) => `@${u.handle}`).join(", ")}. Point them at another key first.`,
-        "credential.in_use",
-        { agents: users.map((u) => u.name).join(", ") },
+  const { deleted, users } = await db.transaction(async (tx) => {
+    await lockCredential(tx, orgId, credentialId);
+    const users = await tx
+      .select({ id: schema.agents.id, handle: schema.agents.handle, name: schema.agents.name })
+      .from(schema.agents)
+      .where(
+        and(
+          eq(schema.agents.orgId, orgId),
+          eq(schema.agents.credentialId, credentialId),
+          isNull(schema.agents.archivedAt),
+        ),
       );
+    if (!options.release) {
+      await refuseIfDefault(tx, orgId, credentialId);
+      await refuseIfDecisionCredential(tx, orgId, credentialId);
+      if (users.length > 0) {
+        throw new ConflictError(
+          `In use by ${users.map((u) => `@${u.handle}`).join(", ")}. Point them at another key first.`,
+          "credential.in_use",
+          { agents: users.map((u) => u.name).join(", ") },
+        );
+      }
     }
-  }
-  const deleted = await db.transaction(async (tx) => {
     if (options.release) await dropDefault(tx, orgId, credentialId);
-    return tx
+    if (options.release) await dropDecisionCredential(tx, orgId, credentialId);
+    const deleted = await tx
       .delete(providerCredentials)
       .where(and(eq(providerCredentials.id, credentialId), eq(providerCredentials.orgId, orgId)))
       .returning({
@@ -778,9 +848,10 @@ export async function deleteCredential(
         label: providerCredentials.label,
         keyHint: providerCredentials.keyHint,
       });
+    if (deleted[0]) await auditCredential(tx, orgId, actorId, "credential.deleted", deleted[0]);
+    return { deleted, users };
   });
   if (!deleted[0]) throw new NotFoundError("Credential not found");
-  await auditCredential(db, orgId, actorId, "credential.deleted", deleted[0]);
   caches.credentials.delete(`${orgId}:${credentialId}`);
   for (const u of users) caches.agents.delete(`${orgId}:${u.id}`);
   invalidateDefaults(orgId);
@@ -822,6 +893,8 @@ export async function removeCredentialCopies(
     return parsed && ids.includes(parsed.credentialId) ? customModelId(kept.id, parsed.model) : model;
   };
   const moved = await db.transaction(async (tx) => {
+    // One order for every credential touched, so a concurrent save, revoke or delete cannot interleave.
+    for (const id of [kept.id, ...ids].sort()) await lockCredential(tx, orgId, id);
     const movedAgents = await tx
       .update(agents)
       .set({ credentialId: kept.id })
@@ -871,6 +944,9 @@ export async function removeCredentialCopies(
             model: renamed(setup.model),
             ...(setup.key ? { key: swapId(setup.key) } : {}),
           },
+          ...(settings.decisions && ids.includes(settings.decisions.credentialId)
+            ? { decisions: { ...settings.decisions, credentialId: kept.id } }
+            : {}),
           updatedAt: new Date(),
         })
         .where(eq(organizationSettings.orgId, orgId));

@@ -42,6 +42,7 @@ import { SETTLE_JOB, type SettleOrigin } from "./context/proposals";
 import { REFLECT_DEFAULTS, reflectThread } from "./context/reflect";
 import { judgeOf, summaryModelReady } from "./context/summaries";
 import { reportDroppedMentions, tellWakeSkipped } from "./continuation";
+import type { WorkspaceDecisions } from "./decision-settings";
 import { DEVICE_WAIT_EXPIRED_JOB, expireDeviceWait } from "./device-waits";
 import {
   deferMentionReport,
@@ -84,8 +85,8 @@ import { GITHUB_EVENT_JOB, type GitHubAppEvent, handleGitHubAppEvent } from "./g
 import { FILE_JOIN_REQUEST_JOB, fileJoinRequest } from "./invite-requests";
 import { announceTaskConversation } from "./issues";
 import type { JevKey, JevKeySource } from "./jev-key";
-import { DEEP_MENTION_THRESHOLD, DEEP_WAKE_HOP, MENTION_WAKE_THRESHOLD, mentionNeedsNothing } from "./judge";
-import { platformCapReached, platformCapRouter } from "./limits";
+import { DEEP_MENTION_THRESHOLD, DEEP_WAKE_HOP, judgeName, MENTION_WAKE_THRESHOLD, mentionNeedsNothing } from "./judge";
+import { PLATFORM_CAP, platformCapReached } from "./limits";
 import type { LiveDocs } from "./live/docs";
 import { liveImageJobHandlers } from "./live/images";
 import { liveJobHandlers } from "./live/jobs";
@@ -124,11 +125,12 @@ import {
   createLlmRouterStrategy,
   DEFAULT_ROUTER_POLICY,
   type RouterDeps,
+  RouterSkip,
   type RouterStrategy,
   routeMessage,
   smallModelFor,
 } from "./router";
-import { createJevRouterStrategy, routeChain } from "./router-jev";
+import { createJevRouterStrategy, jevCostNanoUsd, routeChain } from "./router-jev";
 import { createPlanRouterStrategy } from "./router-plan";
 import { executeRoutineRun } from "./routines";
 import { type AgentRun, NO_AI } from "./runs";
@@ -245,6 +247,8 @@ export interface JobDeps extends RunExecutorDeps {
     mentionThreshold?: number;
     /** Replaces the core small-model step (e.g. an optional external classifier). */
     strategy?: RouterStrategy;
+    /** Workspace decision models, resolved per organization; null keeps the installation's setup. */
+    decisions?: WorkspaceDecisions;
     /** TypeSafe Jev as the chain's first step (the installation's key, never per org). */
     jev?: { key: JevKeySource; timeoutMs?: number; fetch?: typeof fetch; baseURL?: string };
     /**
@@ -276,29 +280,32 @@ export function messageRouter(deps: JobDeps): RouterDeps | null {
   const jev = router.jev;
   const plans = router.plans && !isAgentesCloud(router.plans.publicUrl) ? router.plans.hub : null;
   const steps = [
-    ...(jev
+    ...(jev || router.decisions
       ? [
-          platformCapRouter(
-            deps.db,
-            createJevRouterStrategy({
-              key: jev.key,
-              timeoutMs: jev.timeoutMs,
-              fetch: jev.fetch,
-              baseURL: jev.baseURL,
-              recordUsage: async (u) => {
-                await deps.gateway.recordExternalUsage({
-                  orgId: u.orgId,
-                  kind: "router",
-                  provider: "typesafe",
-                  model: u.model,
-                  requestedModel: "route",
-                  inputTokens: u.inputTokens,
-                  outputTokens: u.outputTokens,
-                  costNanoUsd: u.costNanoUsd,
-                });
-              },
-            }),
-          ),
+          createJevRouterStrategy({
+            key: jev?.key ?? { key: async () => null, usable: () => false, report: () => {} },
+            resolve: async (orgId) => {
+              const target = await router.decisions?.target(orgId);
+              if (!target && jev && (await platformCapReached(deps.db, orgId))) throw new RouterSkip(PLATFORM_CAP);
+              return target ?? null;
+            },
+            timeoutMs: jev?.timeoutMs,
+            fetch: jev?.fetch,
+            baseURL: jev?.baseURL,
+            recordUsage: async (u) => {
+              await deps.gateway.recordExternalUsage({
+                orgId: u.orgId,
+                kind: "router",
+                provider: u.provider ?? "typesafe",
+                credentialId: u.credentialId,
+                model: u.model,
+                requestedModel: "route",
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                costNanoUsd: u.costNanoUsd ?? jevCostNanoUsd(u.inputTokens),
+              });
+            },
+          }),
         ]
       : []),
     router.strategy ?? createLlmRouterStrategy({ gateway: deps.gateway, resolveModel: smallModel }),
@@ -314,12 +321,23 @@ export function messageRouter(deps: JobDeps): RouterDeps | null {
     },
     hasAi: (orgId) => orgHasAi({ db: deps.db, gateway: deps.gateway, machines: deps.machines }, orgId),
     outOfOffice: (orgId, ids) => outOfOfficeIds(deps.db, orgId, ids),
-    routing: { jev: () => jevPicks(jev?.key), smallModel, plans },
+    routing: {
+      jev: async (orgId) => {
+        const view = await router.decisions?.view(orgId);
+        return view?.settings ? view.available : jevPicks(jev?.key);
+      },
+      decisionModel: async (orgId) => (await router.decisions?.view(orgId))?.settings?.model ?? null,
+      smallModel,
+      plans,
+    },
     quietMs: router.quietMs,
     pubsub: deps.pubsub,
-    // Jev bills the platform: past the workspace's platform AI for the month, its own small model picks, else only
-    // @mentions start agents.
-    ...(jev ? { platformCapReached: (orgId: string) => platformCapReached(deps.db, orgId) } : {}),
+    ...(jev
+      ? {
+          platformCapReached: async (orgId: string) =>
+            (await router.decisions?.view(orgId))?.settings ? false : platformCapReached(deps.db, orgId),
+        }
+      : {}),
   };
 }
 
@@ -392,7 +410,7 @@ export function createJobHandlers(deps: JobDeps): JobHandlers {
           targets: others.map((t) => ({ agentId: t.id, handle: t.handle, name: t.name, role: t.role || null })),
         });
         for (const [id, nothing] of out) scores.set(id, 1 - nothing);
-        strategy = `mention-${judge.name}`;
+        strategy = `mention-${await judgeName(judge, message.orgId)}`;
       } catch (e) {
         error = e instanceof Error ? e.message.slice(0, 300) : String(e);
       }
