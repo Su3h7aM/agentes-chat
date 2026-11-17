@@ -824,7 +824,7 @@ test.if(posix)(
 test("one Bun for the repo, its image and system-mode computers (1.3.5 or newer)", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as { packageManager: string };
   expect(pkg.packageManager).toBe(`bun@${RUNNER_BUN_VERSION}`);
-  expect(readFileSync(path.join(root, "Dockerfile"), "utf8")).toContain(`FROM oven/bun:${RUNNER_BUN_VERSION}\n`);
+  expect(readFileSync(path.join(root, "Dockerfile"), "utf8")).toContain(`FROM oven/bun:${RUNNER_BUN_VERSION}-alpine\n`);
   expect(readFileSync(path.join(root, "apps/mobile/eas.json"), "utf8")).toContain(`"bun": "${RUNNER_BUN_VERSION}"`);
   const [major = 0, minor = 0, patch = 0] = RUNNER_BUN_VERSION.split(".").map(Number);
   expect(major * 1e6 + minor * 1e3 + patch).toBeGreaterThanOrEqual(1_003_005);
