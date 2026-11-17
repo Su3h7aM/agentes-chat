@@ -9,6 +9,9 @@
  *       The folders, plus one package per computer, `agentes-native-<version>-<os>-<arch>.tar.gz`,
  *       each with the pinned Bun for it (install.sh's version and SHA-256), and `native.json`, which
  *       the release signs (`native.json.sig`).
+ *   bun scripts/native-package.ts image [--out <dir>]
+ *       <out>/image/: what the Docker image holds, the same server/, web/ and licenses, with the server
+ *       bundled from main.ts (the image's entrypoint) and neither Bun nor the launcher.
  *
  * The server is JavaScript and WebAssembly, so one machine builds every package: only Bun differs.
  * Needs `unzip` and `tar`. The version is apps/server/package.json's unless `--version` says.
@@ -140,9 +143,12 @@ function copyLicenses(inputs: string[], into: string) {
   return seen.size;
 }
 
-/** `<out>/agentes/<version>`: everything but Bun. */
-export async function buildFolders(out: string, version: string) {
-  const base = join(out, "agentes", version);
+/**
+ * What the native packages and the image share, into `base`: web/ (with the runner), server/ (the server
+ * bundled from `entry` into lib/, its externals, migrations and assets), LICENSE, NOTICE and the bundled
+ * packages' licenses. Bun itself is not here: each caller brings its own.
+ */
+export async function buildRelease(base: string, entry: string) {
   rmSync(base, { recursive: true, force: true });
   mkdirSync(base, { recursive: true });
 
@@ -161,15 +167,14 @@ export async function buildFolders(out: string, version: string) {
 
   const server = join(base, "server");
   const built = await Bun.build({
-    // The freeze watch's thread is a file of its own, loaded beside `native.js` (`startFreezeWatch`).
-    entrypoints: [join(ROOT, "apps/server/src/native.ts"), join(ROOT, "apps/server/src/freeze-watch-worker.ts")],
+    // The freeze watch's thread is a file of its own, loaded beside the entry's bundle (`startFreezeWatch`).
+    entrypoints: [join(ROOT, entry), join(ROOT, "apps/server/src/freeze-watch-worker.ts")],
     target: "bun",
     outdir: join(server, "lib"),
     external: EXTERNAL,
     metafile: true,
   });
   if (!built.success) throw new AggregateError(built.logs, "the server didn't bundle");
-  writeFileSync(join(server, "native.js"), ENTRY);
   // Read beside the bundle, as from the packages' own folders (`../migrations`, `../assets`).
   cpSync(join(ROOT, "packages/db/migrations"), join(server, "migrations"), runtimeOnly);
   cpSync(join(ROOT, "packages/engine/assets"), join(server, "assets"), { recursive: true });
@@ -179,14 +184,21 @@ export async function buildFolders(out: string, version: string) {
   } as Record<string, string>;
   for (const name of EXTERNAL) copyPackage(name, from[name] ?? join(ROOT, "packages/db"), server);
 
-  mkdirSync(join(base, "bin"));
-  writeFileSync(join(base, "bin/agentes-server"), LAUNCHER);
-  chmodSync(join(base, "bin/agentes-server"), 0o755);
   for (const file of ["LICENSE", "NOTICE"]) cpSync(join(ROOT, file), join(base, file));
-  cpSync(join(ROOT, "apps/desktop/src-tauri/licenses/bun"), join(base, "licenses/bun"), { recursive: true });
   const inputs = [built, runner].flatMap((r) => Object.keys(r.metafile?.inputs ?? {}));
   const licensed = copyLicenses(inputs, join(base, "licenses"));
   console.log(`${relative(ROOT, base)}: server and web built, ${licensed} bundled packages' licenses`);
+}
+
+/** `<out>/agentes/<version>`: everything but Bun. */
+export async function buildFolders(out: string, version: string) {
+  const base = join(out, "agentes", version);
+  await buildRelease(base, "apps/server/src/native.ts");
+  writeFileSync(join(base, "server/native.js"), ENTRY);
+  mkdirSync(join(base, "bin"));
+  writeFileSync(join(base, "bin/agentes-server"), LAUNCHER);
+  chmodSync(join(base, "bin/agentes-server"), 0o755);
+  cpSync(join(ROOT, "apps/desktop/src-tauri/licenses/bun"), join(base, "licenses/bun"), { recursive: true });
   return base;
 }
 
@@ -253,6 +265,7 @@ if (import.meta.main) {
     (JSON.parse(readFileSync(join(ROOT, "apps/server/package.json"), "utf8")) as { version: string }).version;
   const command = positionals[0] ?? "packages";
   if (command === "folders") await buildFolders(out, version);
+  else if (command === "image") await buildRelease(join(out, "image"), "apps/server/src/main.ts");
   else if (command === "packages") {
     const targets = (values.targets?.split(",") ?? Object.keys(TARGETS)) as Target[];
     for (const t of targets)
@@ -260,6 +273,6 @@ if (import.meta.main) {
     console.log(JSON.stringify(await buildPackages(out, version, targets), null, 2));
   } else
     throw new Error(
-      "usage: bun scripts/native-package.ts folders|packages [--out <dir>] [--version <v>] [--targets …]",
+      "usage: bun scripts/native-package.ts folders|packages|image [--out <dir>] [--version <v>] [--targets …]",
     );
 }

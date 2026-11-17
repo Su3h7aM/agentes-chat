@@ -1,29 +1,50 @@
+# Version control and tool state (Git, Jujutsu, and the agents' and editors' own folders)
 .git
 .jj
+.github
 .agents
 .codex
+.claude
+.impeccable
 .aws
+.data
+.DS_Store
+*.log
+
+# Secrets and their backups, never in a build context
 .env
 .env.*
 !.env.example
-**/node_modules
-**/dist
-.data
-.claude
-coverage
-docs
-deploy
-*.log
-# Backups as SELF_HOSTING.md takes them.
 *.dump
 files-*.tar.gz
-.DS_Store
-apps/desktop/src-tauri/target
-apps/mobile/ios
-apps/mobile/android
-apps/mobile/.expo
 **/*.p8
 **/*.p12
 **/*.jks
 **/*.keystore
 **/credentials.json
+
+# Installed and built output: rebuilt inside the image
+**/node_modules
+**/dist
+apps/desktop/src-tauri/target
+apps/mobile/.expo
+
+# The apps other than the web app are not part of the server image: their manifests stay for the
+# workspace install, their sources do not
+apps/desktop/*
+!apps/desktop/package.json
+apps/mobile/*
+!apps/mobile/package.json
+
+# Documentation, deployment recipes, repo scripts but the release build, translation work, tests and coverage
+docs
+deploy
+scripts/*
+!scripts/native-package.ts
+i18n-work
+coverage
+apps/server/scripts
+**/test
+**/*.test.ts
+**/*.test.tsx
+/*.md
