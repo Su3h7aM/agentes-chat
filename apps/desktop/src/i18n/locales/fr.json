@@ -92,6 +92,11 @@
     "pauseHintServer": "Ce qui tourne déjà se termine normalement. Le serveur reste en ligne.",
     "resume": "Relancer les agents",
     "open": "Ouvrir agentes.chat",
+    "menu": {
+      "show": "Afficher",
+      "hide": "Masquer",
+      "quit": "Quitter"
+    },
     "prefs": "Préférences…",
     "quit": "Quitter agentes.chat",
     "pausedFor1h": "En pause pendant 1 heure",

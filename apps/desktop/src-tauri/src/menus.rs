@@ -136,6 +136,9 @@ pub fn on_event(app: &AppHandle, id: &str) {
             let _ = crate::present(app, "welcome");
         }
         "open" => crate::open_app(app),
+        // The tray's Hide (Windows and Linux), shown while the window is on screen.
+        #[cfg(not(target_os = "macos"))]
+        "hide" => crate::tray::hide_window(app),
         // The tray's line for the server here (Windows and Linux).
         "hereStart" => crate::local_server::start_by_hand(app),
         "hereStop" => {

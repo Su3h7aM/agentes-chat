@@ -725,11 +725,14 @@ pub fn run() {
                     *at = Some(Instant::now());
                 }
             }
+            // Shown, hidden and minimized windows gain or lose focus: the tray's Show or Hide follows.
             WindowEvent::Focused(true) if window.label() == main_window::LABEL => {
                 main_window::focused(window.app_handle());
+                tray::window_changed(window.app_handle());
             }
             WindowEvent::Focused(false) if window.label() == main_window::LABEL => {
                 main_window::keep_lights(window.app_handle());
+                tray::window_changed(window.app_handle());
             }
             // Closing it while agentes.chat is being set up only hides it: the setup goes on (Cancel stops it).
             WindowEvent::CloseRequested { api, .. }
@@ -747,7 +750,7 @@ pub fn run() {
                 api.prevent_close();
                 if window.label() == main_window::LABEL {
                     window_state::remember(window, false);
-                    // On Linux the window hides when the tray icon shows (its Open brings it back). With no tray
+                    // On Linux the window hides when the tray icon shows (its Show brings it back). With no tray
                     // it stays in reach, minimized. One that may be black (its page arrived on the graphics card
                     // and never painted) quits instead, so opening the app again draws a step safer
                     // (graphics.rs `decide`).
@@ -775,6 +778,9 @@ pub fn run() {
                     }
                 }
                 let _ = window.hide();
+                if window.label() == main_window::LABEL {
+                    tray::window_going(window.app_handle(), false);
+                }
             }
             WindowEvent::Moved(_) if window.label() == main_window::LABEL => window_state::remember(window, true),
             WindowEvent::Resized(_) if window.label() == main_window::LABEL => {

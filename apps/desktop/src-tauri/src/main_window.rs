@@ -727,6 +727,8 @@ fn front(app: &AppHandle) -> Result<(), String> {
     let window = app.get_window(LABEL).ok_or("window not found")?;
     let _ = window.unminimize();
     window.show().map_err(|e| e.to_string())?;
+    // The tray's Hide, even where the system keeps the focus from it.
+    crate::tray::window_going(app, true);
     window.set_focus().map_err(|e| e.to_string())
 }
 

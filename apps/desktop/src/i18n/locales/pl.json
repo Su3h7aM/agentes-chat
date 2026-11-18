@@ -94,6 +94,11 @@
     "pauseHintServer": "To, co już działa, kończy się normalnie. Serwer działa dalej.",
     "resume": "Wznów agentów",
     "open": "Otwórz agentes.chat",
+    "menu": {
+      "show": "Pokaż",
+      "hide": "Ukryj",
+      "quit": "Zakończ"
+    },
     "prefs": "Preferencje…",
     "quit": "Zakończ agentes.chat",
     "pausedFor1h": "Wstrzymano na 1 godzinę",

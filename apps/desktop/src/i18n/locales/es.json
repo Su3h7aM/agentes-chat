@@ -92,6 +92,11 @@
     "pauseHintServer": "Lo que ya está en marcha termina con normalidad. El servidor sigue funcionando.",
     "resume": "Reanudar los agentes",
     "open": "Abrir agentes.chat",
+    "menu": {
+      "show": "Mostrar",
+      "hide": "Ocultar",
+      "quit": "Salir"
+    },
     "prefs": "Preferencias…",
     "quit": "Salir de agentes.chat",
     "pausedFor1h": "En pausa por 1 hora",

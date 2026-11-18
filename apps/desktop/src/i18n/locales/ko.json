@@ -88,6 +88,11 @@
     "pauseHintServer": "이미 실행 중인 작업은 평소처럼 끝나요. 서버는 계속 켜져 있어요.",
     "resume": "에이전트 재개",
     "open": "agentes.chat 열기",
+    "menu": {
+      "show": "보기",
+      "hide": "가리기",
+      "quit": "종료"
+    },
     "prefs": "환경설정…",
     "quit": "agentes.chat 종료",
     "pausedFor1h": "1시간 동안 일시 중지됨",

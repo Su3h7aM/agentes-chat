@@ -88,6 +88,11 @@
     "pauseHintServer": "已在运行的任务会正常结束。服务器保持在线。",
     "resume": "恢复智能体",
     "open": "打开 agentes.chat",
+    "menu": {
+      "show": "显示",
+      "hide": "隐藏",
+      "quit": "退出"
+    },
     "prefs": "偏好设置…",
     "quit": "退出 agentes.chat",
     "pausedFor1h": "已暂停 1 小时",

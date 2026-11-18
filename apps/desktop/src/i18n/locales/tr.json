@@ -90,6 +90,11 @@
     "pauseHintServer": "Zaten çalışan işler normal şekilde biter. Sunucu açık kalır.",
     "resume": "Ajanları sürdür",
     "open": "agentes.chat'i aç",
+    "menu": {
+      "show": "Göster",
+      "hide": "Gizle",
+      "quit": "Çık"
+    },
     "prefs": "Tercihler…",
     "quit": "agentes.chat'ten çık",
     "pausedFor1h": "1 saatliğine duraklatıldı",

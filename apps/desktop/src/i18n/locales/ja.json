@@ -88,6 +88,11 @@
     "pauseHintServer": "実行中のものは通常どおり終わります。サーバーは動き続けます。",
     "resume": "エージェントを再開",
     "open": "agentes.chatを開く",
+    "menu": {
+      "show": "表示",
+      "hide": "隠す",
+      "quit": "終了"
+    },
     "prefs": "環境設定…",
     "quit": "agentes.chatを終了",
     "pausedFor1h": "1時間一時停止中",

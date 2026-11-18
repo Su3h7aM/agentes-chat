@@ -89,6 +89,12 @@ export const desktopEn = {
     pauseHintServer: "What is already running finishes normally. The server stays up.",
     resume: "Resume the agents",
     open: "Open agentes.chat",
+    /** The tray icon's own menu on Windows and Linux: under the app's icon, so without its name. */
+    menu: {
+      show: "Show",
+      hide: "Hide",
+      quit: "Quit",
+    },
     prefs: "Preferences…",
     quit: "Quit agentes.chat",
     pausedFor1h: "Paused for 1 hour",
