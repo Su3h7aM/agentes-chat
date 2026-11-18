@@ -8,7 +8,7 @@ import { ErrorBoundary } from "@agenteschat/client/lib/error-boundary";
 import { errorText } from "@agenteschat/client/lib/errors";
 import { holdSkies, installTitleTips, trackInput } from "@agenteschat/ui";
 import { AppProviders, type AppServices } from "./app/providers";
-import { createQueryClient } from "./app/query-client";
+import { bindFocusToWindow, createQueryClient } from "./app/query-client";
 import { backToSignIn } from "./app/unauthorized";
 import { createBetterAuthClient } from "./auth/better-auth";
 import { copyPillAddresses } from "./chat/link-pill-copy";
@@ -112,6 +112,9 @@ const queryClient = createQueryClient({
   onMutationError: (message) => toasts.show(message, "error"),
   describeError: (error) => errorText(i18n.t, error, i18n.language),
 });
+// In the desktop app, polls and reads on return follow the window's focus: it stays visible while another app holds
+// it. A browser tab keeps TanStack's visibility check: one left showing on a second screen goes on updating.
+if (platform) bindFocusToWindow();
 
 // The answer above is the cache's: the sign-in guards don't ask again.
 void queryClient.prefetchQuery({ ...authConfigQuery(api), queryFn: () => authConfig });
