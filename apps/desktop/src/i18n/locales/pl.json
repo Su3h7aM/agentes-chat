@@ -630,7 +630,7 @@
       "notchTitle": "Pokazuj agentów w notchu",
       "notchDesc": "Na MacBookach z notchem: wokół kamery widać, kto pracuje.",
       "compatTitle": "Tryb zgodności",
-      "compatDesc": "Rysuje okno bez karty graficznej. Działa wolniej, ale na każdym komputerze. Użyj go, gdy okno robi się czarne, jest ucięte albo się zawiesza.",
+      "compatDesc": "Rysuje okno w sposób, który działa z większą liczbą kart graficznych, a bez karty graficznej, jeśli to nadal zawodzi. Użyj go, gdy okno robi się czarne, jest ucięte albo się zawiesza.",
       "compatReopen": "Zadziała po ponownym otwarciu aplikacji.",
       "reopenNow": "Otwórz ponownie teraz",
       "compatFellBack": "Okno nie otworzyło się z kartą graficzną, więc otworzyło się w trybie zgodności.",

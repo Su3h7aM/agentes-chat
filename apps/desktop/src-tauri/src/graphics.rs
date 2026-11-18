@@ -2,14 +2,19 @@
 //! which calm its styles on the CPU and tag its error reports) and for the person to copy (Preferências ›
 //! Atualizações, `app_info`). Anonymous facts only: never a host name, a user or a path.
 //!
-//! On Linux the person chooses it (Compatibility mode in Preferences › General): on, WebKitGTK draws without the
-//! graphics card (`WEBKIT_DISABLE_DMABUF_RENDERER`); off, with it. Until they choose, it is off on a stack known to
-//! draw well with the graphics card (`good_stack`: Intel's or AMD's cards on their Mesa drivers, from a package) and on
-//! anywhere else. The choice is read before anything starts (`choose`), since WebKitGTK reads that variable once. An
-//! opening with the graphics card whose page arrived from its server and never painted turns it on for the next one,
-//! so a black window is never more than one opening away from a window. Without painting anything,
-//! `--compatibility-mode` turns it on too (and reopens an app already running). A server older than the site's
-//! `page_ready` never clears the opening's marker: with the switch off, every other opening there falls back.
+//! On Linux the person chooses it (Compatibility mode in Preferences › General), and WebKitGTK draws one of three
+//! ways (`Draw`): off, on the graphics card with its DMA-BUF buffers; on, still on the graphics card but handing
+//! frames over in shared memory (`WEBKIT_DMABUF_RENDERER_FORCE_SHM`); and last, without the graphics card
+//! (`WEBKIT_DISABLE_DMABUF_RENDERER`). Until they choose, DMA-BUF is used on a stack known to draw well with it
+//! (`good_stack`: Intel's or AMD's cards on their Mesa drivers, from a package) and shared memory anywhere else.
+//! Shared memory leaves out the DMA-BUF and GBM buffers that go black with NVIDIA's driver, in virtual machines and
+//! in many AppImage setups. Without it, WebKitGTK 2.50 (the AppImage's) paints the same page at 45 frames a second
+//! for a whole core where the other two keep 60 at a tenth to a third of one. The choice is read before anything
+//! starts (`choose`), since WebKitGTK reads those variables once. An opening whose page arrived from its server and
+//! never painted moves the next one a step down, and on stays where it fell (the switch's file says `cpu`), so a
+//! black window is never more than one opening away from a window. Without painting anything, `--compatibility-mode`
+//! turns it on too (and reopens an app already running). A server older than the site's `page_ready` never clears
+//! the opening's marker: every other opening there falls a step.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,10 +24,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 const DMABUF_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
-/// Set beside `DMABUF_VAR` when the app set it: a reopened app inherits both, and its own value is not the person's.
+const SHM_VAR: &str = "WEBKIT_DMABUF_RENDERER_FORCE_SHM";
+/// Set beside `DMABUF_VAR` or `SHM_VAR` when the app set them: a reopened app inherits them, and its own values are not
+/// the person's.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const APP_SET_VAR: &str = "AGENTES_DESKTOP_DMABUF_BY_APP";
-/// The Compatibility mode switch, in the app's config folder: "off", or anything else (none at all too) for on.
+/// The Compatibility mode switch, in the app's config folder: "off"; "cpu", on after drawing in shared memory never
+/// painted; "on", or anything else (none at all too) for the stack's default.
 const COMPAT_FILE: &str = "compatibility-mode";
 /// Turns Compatibility mode on from a terminal, for a window too black to reach Preferences.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -30,10 +38,41 @@ pub const COMPAT_ARG: &str = "--compatibility-mode";
 /// Set once `COMPAT_ARG` was taken: a reopened app keeps its arguments, and must not undo a later switch off.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const ARG_TAKEN_VAR: &str = "AGENTES_DESKTOP_COMPAT_ARG_TAKEN";
-/// The opening's marker (cover.rs `PENDING_FILE`) on the graphics card until its page arrives from its server, then
-/// `GPU_LOADED`: only that one falls back when it never painted.
-pub const GPU_LOADING: &str = "gpu-loading";
-pub const GPU_LOADED: &str = "gpu";
+/// The opening's marker (cover.rs `PENDING_FILE`): the way it draws (`Draw::marker`) with this ending until its page
+/// arrives from its server, then without: only an opening on the graphics card whose page arrived falls a step when
+/// it never painted.
+pub const LOADING: &str = "-loading";
+
+/// How WebKitGTK draws this opening.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Draw {
+    /// On the graphics card, with DMA-BUF buffers.
+    Gpu,
+    /// On the graphics card, frames handed over in shared memory.
+    Shm,
+    /// Without the graphics card.
+    Cpu,
+}
+
+impl Draw {
+    fn marker(self) -> &'static str {
+        match self {
+            Draw::Gpu => "gpu",
+            Draw::Shm => "shm",
+            Draw::Cpu => "cpu",
+        }
+    }
+}
+
+/// What the person's Compatibility-mode file chooses. `Cpu` is where an earlier shared-memory fallback stayed.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Choice {
+    On,
+    Off,
+    Cpu,
+}
 
 /// Why this opening draws the way it does.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -41,11 +80,11 @@ pub const GPU_LOADED: &str = "gpu";
 pub enum Why {
     /// Compatibility mode, on or off.
     Chosen,
-    /// Nobody chose: the graphics card on a stack known to draw well with it, without it anywhere else.
+    /// Nobody chose: DMA-BUF on a known-good stack, shared memory anywhere else.
     Default,
-    /// The last opening, with the graphics card, never painted.
+    /// The last opening, on the graphics card, never painted.
     Fallback,
-    /// The person's own `WEBKIT_DISABLE_DMABUF_RENDERER`.
+    /// The person's own `WEBKIT_DISABLE_DMABUF_RENDERER` or `WEBKIT_DMABUF_RENDERER_FORCE_SHM`.
     Variable,
 }
 
@@ -62,8 +101,9 @@ impl Why {
 }
 
 static WHY: OnceLock<Why> = OnceLock::new();
-/// This computer draws well with the graphics card (`good_stack`), read once as the app starts.
+/// This computer draws well with DMA-BUF (`good_stack`), read once as the app starts.
 static GOOD_STACK: OnceLock<bool> = OnceLock::new();
+static DRAW: OnceLock<Draw> = OnceLock::new();
 /// The fallback is said once, by the first Preferences that asks (`compat_get`).
 static FELL_BACK_UNSAID: AtomicBool = AtomicBool::new(false);
 
@@ -71,59 +111,89 @@ fn why() -> Why {
     WHY.get().copied().unwrap_or(Why::Chosen)
 }
 
-/// This opening fell back to drawing without the graphics card (`choose`).
+/// This opening fell a step because its page never painted (`choose`).
 pub fn fell_back() -> bool {
     why() == Why::Fallback
 }
 
 /// The switch as its file says it: "on" or "off", or nothing chosen (no file, or anything else in it).
-fn chosen(text: Option<&str>) -> Option<bool> {
+fn chosen(text: Option<&str>) -> Option<Choice> {
     match text.map(str::trim) {
-        Some("on") => Some(true),
-        Some("off") => Some(false),
+        Some("on") => Some(Choice::On),
+        Some("off") => Some(Choice::Off),
+        Some("cpu") => Some(Choice::Cpu),
         _ => None,
     }
 }
 
 /// Whether Compatibility mode is on: as chosen, or, with nothing chosen, unless the stack is a good one.
 fn compat_on(text: Option<&str>, good: bool) -> bool {
-    chosen(text).unwrap_or(!good)
+    match chosen(text) {
+        Some(Choice::Off) => false,
+        Some(_) => true,
+        None => !good,
+    }
 }
 
-/// Drawing with the graphics card is known to work: every graphics card is Intel's or AMD's on its Mesa driver, and
-/// the app came in a package. WebKitGTK's DMA-BUF renderer leaves the window blank with NVIDIA's driver and in
-/// virtual machines, and an AppImage brings its own copies of libraries that must match the system's Mesa.
+/// Drawing with DMA-BUF is known to work: every graphics card is Intel's or AMD's on its Mesa driver, and the app
+/// came in a package. WebKitGTK's DMA-BUF renderer leaves the window blank with NVIDIA's driver and in virtual
+/// machines, and an AppImage brings its own copies of libraries that must match the system's Mesa.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn good_stack(drivers: &[String], appimage: bool) -> bool {
     !appimage && !drivers.is_empty() && drivers.iter().all(|d| matches!(d.as_str(), "i915" | "xe" | "amdgpu"))
 }
 
-/// How this opening draws (true: without the graphics card), and why. `own`: the person's own variable, which always
-/// wins. `chosen`: the switch, when the person set it. `good`: the stack draws well with the graphics card
-/// (`good_stack`). `last_unpainted`: what the last opening that never painted wrote in its marker (`marker`): only one
-/// whose page arrived on the graphics card counts, never one that was offline, found its server down or quit first.
+/// How this opening draws, and why. `own_dmabuf`, `own_shm`: the person's own variables, which always win.
+/// `chosen`: the switch, when the person set it. `good`: DMA-BUF is known to work on this stack (`good_stack`).
+/// `last_unpainted`: what the last opening that never painted wrote in its marker (`marker`): only one whose page
+/// arrived on the graphics card counts, never one that was offline, found its server down or quit first.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn decide(own: Option<&str>, chosen: Option<bool>, good: bool, last_unpainted: Option<&str>) -> (bool, Why) {
-    let unpainted = last_unpainted.map(str::trim) == Some(GPU_LOADED);
-    match (own, chosen) {
-        (Some(value), _) => (value != "0", Why::Variable),
-        (None, Some(true)) => (true, Why::Chosen),
-        (None, None) if !good => (true, Why::Default),
-        (None, _) if unpainted => (true, Why::Fallback),
-        (None, Some(false)) => (false, Why::Chosen),
-        (None, None) => (false, Why::Default),
+fn decide(
+    own_dmabuf: Option<&str>,
+    own_shm: Option<&str>,
+    chosen: Option<Choice>,
+    good: bool,
+    last_unpainted: Option<&str>,
+) -> (Draw, Why) {
+    let on = |v: Option<&str>| v.is_some_and(|v| v != "0");
+    if on(own_dmabuf) {
+        return (Draw::Cpu, Why::Variable);
+    }
+    if on(own_shm) {
+        return (Draw::Shm, Why::Variable);
+    }
+    if own_dmabuf.is_some() {
+        return (Draw::Gpu, Why::Variable);
+    }
+    let (draw, why) = match chosen {
+        Some(Choice::Cpu) => (Draw::Cpu, Why::Chosen),
+        Some(Choice::On) => (Draw::Shm, Why::Chosen),
+        Some(Choice::Off) => (Draw::Gpu, Why::Chosen),
+        None if good => (Draw::Gpu, Why::Default),
+        None => (Draw::Shm, Why::Default),
+    };
+    let last = last_unpainted.map(str::trim);
+    match (draw, last) {
+        (Draw::Gpu, last) if last == Some(Draw::Gpu.marker()) => (Draw::Shm, Why::Fallback),
+        (Draw::Shm, last) if last == Some(Draw::Shm.marker()) => (Draw::Cpu, Why::Fallback),
+        _ => (draw, why),
     }
 }
 
-/// The opening's marker as it starts (cover.rs `opening`): "cpu", or `GPU_LOADING`; empty outside Linux.
-pub fn marker() -> &'static str {
-    if !cfg!(target_os = "linux") {
-        ""
-    } else if renderer() == "cpu" {
-        "cpu"
-    } else {
-        GPU_LOADING
+/// The opening's marker as it starts (cover.rs `opening`): "cpu", or the graphics card's way with `LOADING`; empty
+/// outside Linux.
+pub fn marker() -> String {
+    match DRAW.get() {
+        _ if !cfg!(target_os = "linux") => String::new(),
+        _ if renderer() == "cpu" => Draw::Cpu.marker().into(),
+        Some(Draw::Shm) => format!("{}{LOADING}", Draw::Shm.marker()),
+        _ => format!("{}{LOADING}", Draw::Gpu.marker()),
     }
+}
+
+/// A marker that says its opening's page arrived on the graphics card (cover.rs `unpainted_on_gpu`).
+pub fn arrived_on_gpu(marker: &str) -> bool {
+    marker == Draw::Gpu.marker() || marker == Draw::Shm.marker()
 }
 
 /// The app's config folder as Tauri names it (`app_config_dir`), before Tauri is up.
@@ -146,55 +216,65 @@ const IDENTIFIER: &str = "chat.agentes.desktop";
 pub fn choose() {
     let dir = config_dir();
     let read = |name: &str| dir.as_ref().and_then(|d| std::fs::read_to_string(d.join(name)).ok());
-    let own = match std::env::var_os(APP_SET_VAR) {
+    let own = |name: &str| match std::env::var_os(APP_SET_VAR) {
         Some(_) => None,
-        None => std::env::var(DMABUF_VAR).ok(),
+        None => std::env::var(name).ok(),
     };
+    let mut compat = read(COMPAT_FILE);
     let asked = std::env::var_os(ARG_TAKEN_VAR).is_none() && std::env::args().any(|a| a == COMPAT_ARG);
     if asked {
-        if let Some(dir) = &dir {
-            let _ = write_compat(dir, true);
+        // On, but never back up from where an opening already fell: whoever reaches for it has a black window.
+        if compat.as_deref().map(str::trim) != Some("cpu") {
+            compat = Some("on".into());
+            if let Some(dir) = &dir {
+                let _ = write_compat(dir, "on");
+            }
         }
         std::env::set_var(ARG_TAKEN_VAR, "1");
     }
     let last = read(crate::cover::PENDING_FILE);
-    let good = good_stack(&cards().into_iter().map(|(_, driver)| driver).collect::<Vec<_>>(), std::env::var_os("APPIMAGE").is_some());
+    let good = good_stack(
+        &cards().into_iter().map(|(_, driver)| driver).collect::<Vec<_>>(),
+        std::env::var_os("APPIMAGE").is_some(),
+    );
     let _ = GOOD_STACK.set(good);
-    let choice = if asked { Some(true) } else { chosen(read(COMPAT_FILE).as_deref()) };
-    let (cpu, why) = decide(own.as_deref(), choice, good, last.as_deref());
+    let choice = if asked { Some(Choice::On) } else { chosen(compat.as_deref()) };
+    let (draw, why) = decide(
+        own(DMABUF_VAR).as_deref(),
+        own(SHM_VAR).as_deref(),
+        choice,
+        good,
+        last.as_deref(),
+    );
     if why != Why::Variable {
-        if cpu {
-            std::env::set_var(DMABUF_VAR, "1");
-            std::env::set_var(APP_SET_VAR, "1");
-        } else {
-            std::env::remove_var(DMABUF_VAR);
-            std::env::remove_var(APP_SET_VAR);
-        }
+        let set = |name: &str, on: bool| if on { std::env::set_var(name, "1") } else { std::env::remove_var(name) };
+        set(DMABUF_VAR, draw == Draw::Cpu);
+        set(SHM_VAR, draw == Draw::Shm);
+        set(APP_SET_VAR, draw != Draw::Gpu);
     }
     let _ = WHY.set(why);
+    let _ = DRAW.set(draw);
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn choose() {}
 
-/// Once the app is up, never in a second launch on its way to the running one: an opening that fell back keeps
-/// Compatibility mode on, and Preferences says so once. True when it did; a switch that couldn't be written back on
-/// is not claimed to be.
+/// Once the app is up, never in a second launch on its way to the running one: an opening that fell a step stays
+/// there (Compatibility mode on, or on without the graphics card), and Preferences says so once. True when it did; a
+/// switch that couldn't be written is not claimed to be.
 pub fn fall_back(app: &AppHandle) -> bool {
-    let written = fell_back()
-        && app
-            .path()
-            .app_config_dir()
-            .is_ok_and(|dir| write_compat(&dir, true).is_ok());
+    let text = if DRAW.get() == Some(&Draw::Cpu) { "cpu" } else { "on" };
+    let written = fell_back() && app.path().app_config_dir().is_ok_and(|dir| write_compat(&dir, text).is_ok());
     if written {
         FELL_BACK_UNSAID.store(true, Ordering::Relaxed);
     }
     written
 }
 
-fn write_compat(dir: &Path, on: bool) -> std::io::Result<()> {
+/// The switch's file: "on", "off", or "cpu" (`fall_back`).
+fn write_compat(dir: &Path, text: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join(COMPAT_FILE), if on { "on" } else { "off" })
+    std::fs::write(dir.join(COMPAT_FILE), text)
 }
 
 #[derive(Serialize)]
@@ -203,8 +283,8 @@ pub struct Compat {
     on: bool,
     /// This opening fell back, not said yet: true for the first ask only.
     fell_back: bool,
-    /// `WEBKIT_DISABLE_DMABUF_RENDERER` was there when the app started (the person's, or one an older version of the
-    /// app set and passed on as it reopened): it decides, `on` says what it does, and the switch can't change it.
+    /// `WEBKIT_DISABLE_DMABUF_RENDERER` or `WEBKIT_DMABUF_RENDERER_FORCE_SHM` was the person's when the app started: it
+    /// decides, `on` says whether it leaves DMA-BUF buffers out, and the switch can't change it.
     own: bool,
 }
 
@@ -214,13 +294,14 @@ pub struct Compat {
 pub async fn compat_get(app: AppHandle) -> Result<Compat, String> {
     let fell_back = FELL_BACK_UNSAID.swap(false, Ordering::Relaxed);
     if why() == Why::Variable {
-        let on = std::env::var(DMABUF_VAR).is_ok_and(|v| v != "0");
-        return Ok(Compat { on, fell_back, own: true });
+        return Ok(Compat { on: DRAW.get() != Some(&Draw::Gpu), fell_back, own: true });
     }
     let dir = app.path().app_config_dir().ok();
-    let text = tauri::async_runtime::spawn_blocking(move || dir.and_then(|d| std::fs::read_to_string(d.join(COMPAT_FILE)).ok()))
-        .await
-        .map_err(|e| e.to_string())?;
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        dir.and_then(|d| std::fs::read_to_string(d.join(COMPAT_FILE)).ok())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let good = GOOD_STACK.get().copied().unwrap_or(false);
     Ok(Compat { on: compat_on(text.as_deref(), good), fell_back, own: false })
 }
@@ -229,7 +310,7 @@ pub async fn compat_get(app: AppHandle) -> Result<Compat, String> {
 #[tauri::command]
 pub async fn compat_set(app: AppHandle, on: bool) -> Result<(), String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || write_compat(&dir, on).map_err(|e| e.to_string()))
+    tauri::async_runtime::spawn_blocking(move || write_compat(&dir, if on { "on" } else { "off" }).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -439,7 +520,7 @@ mod tests {
 
     #[test]
     fn the_renderer_webkitgtk_ends_up_with() {
-        // The app's own default on Linux, on today's WebKitGTK.
+        // The last step of Compatibility mode, on today's WebKitGTK (its default, shared memory, sets neither).
         assert_eq!(renderer_for(Some("1"), None, (2, 50, 4)), "cpu");
         // The person's own "=0" turns the DMA-BUF renderer back on.
         assert_eq!(renderer_for(Some("0"), None, (2, 50, 4)), "gpu");
@@ -483,25 +564,41 @@ mod tests {
 
     #[test]
     fn how_an_opening_draws_and_why() {
-        // The person's own variable wins over everything, "0" included.
-        assert_eq!(decide(Some("1"), Some(false), true, Some("gpu")), (true, Why::Variable));
-        assert_eq!(decide(Some("0"), Some(true), false, None), (false, Why::Variable));
-        // Compatibility mode on: without the graphics card, on any stack.
-        assert_eq!(decide(None, Some(true), true, None), (true, Why::Chosen));
-        assert_eq!(decide(None, Some(true), false, Some("gpu")), (true, Why::Chosen));
-        // Off: with the graphics card, on any stack...
-        assert_eq!(decide(None, Some(false), false, None), (false, Why::Chosen));
-        assert_eq!(decide(None, Some(false), true, Some("cpu")), (false, Why::Chosen));
-        // ...unless the last opening with it never painted.
-        assert_eq!(decide(None, Some(false), true, Some("gpu")), (true, Why::Fallback));
+        use Choice::{Cpu as CpuChoice, Off, On};
+        use Draw::*;
+        let on = Some(On);
+        let off = Some(Off);
+        let cpu = Some(CpuChoice);
+        // The person's own variables win over everything, "0" included.
+        assert_eq!(decide(Some("1"), None, off, true, Some("gpu")), (Cpu, Why::Variable));
+        assert_eq!(decide(Some("0"), None, on, false, None), (Gpu, Why::Variable));
+        assert_eq!(decide(None, Some("1"), off, true, None), (Shm, Why::Variable));
+        assert_eq!(decide(Some("1"), Some("1"), on, true, None), (Cpu, Why::Variable));
+        // Compatibility mode on: shared memory, and CPU only after that never painted.
+        assert_eq!(decide(None, None, on, true, None), (Shm, Why::Chosen));
+        assert_eq!(decide(None, None, on, false, Some("gpu")), (Shm, Why::Chosen));
+        assert_eq!(decide(None, None, on, true, Some("shm")), (Cpu, Why::Fallback));
+        assert_eq!(decide(None, None, cpu, true, None), (Cpu, Why::Chosen));
+        // Off: DMA-BUF, and shared memory when that never painted.
+        assert_eq!(decide(None, None, off, false, None), (Gpu, Why::Chosen));
+        assert_eq!(decide(None, None, off, true, Some("cpu")), (Gpu, Why::Chosen));
+        assert_eq!(decide(None, None, off, true, Some("gpu")), (Shm, Why::Fallback));
+        // Nothing chosen: DMA-BUF on a known-good stack, shared memory anywhere else, with the same fallbacks.
+        assert_eq!(decide(None, None, None, true, None), (Gpu, Why::Default));
+        assert_eq!(decide(None, None, None, true, Some("gpu")), (Shm, Why::Fallback));
+        assert_eq!(decide(None, None, None, false, None), (Shm, Why::Default));
+        assert_eq!(decide(None, None, None, false, Some("shm")), (Cpu, Why::Fallback));
         // A marker from before the mode was written in it says nothing.
-        assert_eq!(decide(None, Some(false), true, Some("")), (false, Why::Chosen));
+        assert_eq!(decide(None, None, off, true, Some("")), (Gpu, Why::Chosen));
         // Nor an opening whose page never arrived from its server (offline, the server down, quit first).
-        assert_eq!(decide(None, Some(false), true, Some(GPU_LOADING)), (false, Why::Chosen));
-        // Nothing chosen: the graphics card on a good stack, with the same fallback; without it anywhere else.
-        assert_eq!(decide(None, None, true, None), (false, Why::Default));
-        assert_eq!(decide(None, None, true, Some("gpu")), (true, Why::Fallback));
-        assert_eq!(decide(None, None, false, None), (true, Why::Default));
+        assert_eq!(decide(None, None, off, true, Some("gpu-loading")), (Gpu, Why::Chosen));
+        assert_eq!(decide(None, None, on, false, Some("shm-loading")), (Shm, Why::Chosen));
+    }
+
+    #[test]
+    fn a_marker_says_its_page_arrived_on_the_graphics_card() {
+        assert!(arrived_on_gpu("gpu") && arrived_on_gpu("shm"));
+        assert!(!arrived_on_gpu("cpu") && !arrived_on_gpu("gpu-loading") && !arrived_on_gpu(""));
     }
 
     #[test]
@@ -509,6 +606,7 @@ mod tests {
         for good in [true, false] {
             assert!(compat_on(Some("on"), good));
             assert!(compat_on(Some("on\n"), good));
+            assert!(compat_on(Some("cpu"), good));
             assert!(!compat_on(Some("off"), good));
             assert!(!compat_on(Some("off\n"), good));
         }

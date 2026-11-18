@@ -625,7 +625,7 @@
       "notchTitle": "Mostra gli agenti nel notch",
       "notchDesc": "Sui MacBook con il notch: chi sta lavorando compare intorno alla fotocamera.",
       "compatTitle": "Modalità compatibilità",
-      "compatDesc": "Disegna la finestra senza la scheda grafica. È più lenta, ma funziona su qualsiasi computer. Usala se la finestra diventa nera, si taglia o si blocca.",
+      "compatDesc": "Disegna la finestra in un modo che funziona con più schede grafiche, e senza la scheda grafica se ancora non va. Usala se la finestra diventa nera, si taglia o si blocca.",
       "compatReopen": "Vale alla riapertura dell'app.",
       "reopenNow": "Riapri ora",
       "compatFellBack": "La finestra non si è aperta con la scheda grafica, quindi si è aperta in modalità compatibilità.",

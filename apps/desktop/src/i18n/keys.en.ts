@@ -696,10 +696,10 @@ export const desktopEn = {
       menuBarTitle: "Show in the menu bar",
       notchTitle: "Show the agents in the notch",
       notchDesc: "On MacBooks with a notch: who is working shows around the camera.",
-      /** Linux: draw the window without the graphics card. */
+      /** Linux: draw the window in shared memory, and without the graphics card if that never paints. */
       compatTitle: "Compatibility mode",
       compatDesc:
-        "Draws the window without the graphics card. It's slower but works on any computer. Use it if the window goes black, gets cut off or freezes.",
+        "Draws the window in a way that works with more graphics cards, and without the graphics card if that still fails. Use it if the window goes black, gets cut off or freezes.",
       /** Toast after changing Compatibility mode: the drawing mode changes only when the app starts. */
       compatReopen: "Takes effect when the app reopens.",
       reopenNow: "Reopen now",

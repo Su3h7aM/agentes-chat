@@ -296,20 +296,22 @@ pub fn page_ready(app: AppHandle, webview: tauri::Webview, site: Option<bool>) -
 pub fn site_loaded(app: &AppHandle, page: &tauri::WebviewWindow) {
     #[cfg(target_os = "linux")]
     {
-        fn loading(path: &std::path::Path) -> bool {
-            std::fs::read_to_string(path).is_ok_and(|m| m == crate::graphics::GPU_LOADING)
+        /// The way the opening draws, while its page hasn't arrived yet.
+        fn loading(path: &std::path::Path) -> Option<String> {
+            let marker = std::fs::read_to_string(path).ok()?;
+            marker.strip_suffix(crate::graphics::LOADING).map(str::to_owned)
         }
         // Linux opens on the app's own cover page, which answers 200 from the app itself: only the site arriving counts.
         if page.url().is_ok_and(|u| on_cover_page(&u)) {
             return;
         }
-        let Some(path) = pending_path(app).filter(|p| loading(p)) else { return };
+        let Some(path) = pending_path(app).filter(|p| loading(p).is_some()) else { return };
         let _ = page.with_webview(move |view| {
             use webkit2gtk::{URIResponseExt, WebResourceExt, WebViewExt};
             let status = view.inner().main_resource().and_then(|r| r.response()).map(|r| r.status_code());
             let _marker = MARKER.lock();
-            if arrived(status) && loading(&path) {
-                let _ = std::fs::write(&path, crate::graphics::GPU_LOADED);
+            if let Some(way) = loading(&path).filter(|_| arrived(status)) {
+                let _ = std::fs::write(&path, way);
             }
         });
     }
@@ -329,7 +331,7 @@ fn arrived(status: Option<u32>) -> bool {
 pub fn unpainted_on_gpu(app: &AppHandle) -> bool {
     pending_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|m| m == crate::graphics::GPU_LOADED)
+        .is_some_and(|m| crate::graphics::arrived_on_gpu(&m))
 }
 
 fn pending_path(app: &AppHandle) -> Option<PathBuf> {

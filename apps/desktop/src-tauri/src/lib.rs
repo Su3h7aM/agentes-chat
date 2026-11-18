@@ -829,7 +829,6 @@ pub fn run() {
             cover::page_ready,
             cover::cover_retry,
             cover::cover_hide,
-            cover::cover_reveal,
             cover::cover_server,
             cover::cover_details,
             prepare::screen_access,
@@ -981,7 +980,7 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
                 window_state::remember(window, false);
                 // Some Linux desktops show no tray icon: there the window stays in reach, minimized. One that
                 // may be black (its page arrived on the graphics card and never painted) quits instead, so
-                // opening the app again draws without the graphics card (graphics.rs `decide`).
+                // opening the app again draws a step safer (graphics.rs `decide`).
                 #[cfg(target_os = "linux")]
                 {
                     if cover::unpainted_on_gpu(window.app_handle()) {

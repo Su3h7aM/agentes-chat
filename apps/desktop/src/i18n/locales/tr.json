@@ -620,7 +620,7 @@
       "notchTitle": "Ajanları çentikte göster",
       "notchDesc": "Çentikli MacBook'larda: çalışanlar kameranın çevresinde görünür.",
       "compatTitle": "Uyumluluk modu",
-      "compatDesc": "Pencereyi ekran kartı olmadan çizer. Daha yavaştır ama her bilgisayarda çalışır. Pencere kararırsa, kesik görünürse veya donarsa kullanın.",
+      "compatDesc": "Pencereyi daha fazla ekran kartıyla çalışan bir şekilde çizer, bu da başarısız olursa ekran kartı olmadan çizer. Pencere kararırsa, kesik görünürse veya donarsa kullanın.",
       "compatReopen": "Uygulama yeniden açıldığında geçerli olur.",
       "reopenNow": "Şimdi yeniden aç",
       "compatFellBack": "Pencere ekran kartıyla açılmadı, bu yüzden uyumluluk modunda açıldı.",
