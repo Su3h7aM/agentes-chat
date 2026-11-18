@@ -629,7 +629,7 @@ export const desktopPtBR = {
       notchDesc: "Em MacBooks com notch: quem está trabalhando aparece em volta da câmera.",
       compatTitle: "Modo compatível",
       compatDesc:
-        "Desenha a janela sem a placa de vídeo. É mais lento, mas funciona em qualquer computador. Use se a janela ficar preta, cortada ou travada.",
+        "Desenha a janela de um jeito que funciona com mais placas de vídeo e, se ainda falhar, sem a placa. Use se a janela ficar preta, cortada ou travada.",
       compatReopen: "Vale ao reabrir o app.",
       reopenNow: "Reabrir agora",
       compatFellBack: "A janela não abriu com a placa de vídeo. Ela abriu no modo compatível.",

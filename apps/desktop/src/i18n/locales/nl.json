@@ -583,7 +583,7 @@
       "notchTitle": "De agents in de notch tonen",
       "notchDesc": "Op MacBooks met een notch: wie aan het werk is, verschijnt rond de camera.",
       "compatTitle": "Compatibiliteitsmodus",
-      "compatDesc": "Tekent het venster zonder de videokaart. Het is trager, maar werkt op elke computer. Gebruik het als het venster zwart wordt, wordt afgesneden of vastloopt.",
+      "compatDesc": "Tekent het venster op een manier die met meer videokaarten werkt, en zonder de videokaart als dat nog steeds mislukt. Gebruik het als het venster zwart wordt, wordt afgesneden of vastloopt.",
       "compatReopen": "Geldt wanneer de app opnieuw opent.",
       "reopenNow": "Nu opnieuw openen",
       "compatFellBack": "Het venster opende niet met de videokaart, dus het opende in compatibiliteitsmodus.",

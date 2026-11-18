@@ -588,7 +588,7 @@
       "notchTitle": "Afficher les agents dans l'encoche",
       "notchDesc": "Sur les MacBook avec encoche : qui travaille s'affiche autour de la caméra.",
       "compatTitle": "Mode compatibilité",
-      "compatDesc": "Dessine la fenêtre sans la carte graphique. C'est plus lent, mais ça marche sur n'importe quel ordinateur. Utilisez-le si la fenêtre devient noire, est coupée ou se fige.",
+      "compatDesc": "Dessine la fenêtre d'une façon qui marche avec plus de cartes graphiques, et sans la carte graphique si cela échoue encore. Utilisez-le si la fenêtre devient noire, est coupée ou se fige.",
       "compatReopen": "Prend effet à la réouverture de l'app.",
       "reopenNow": "Rouvrir maintenant",
       "compatFellBack": "La fenêtre ne s'est pas ouverte avec la carte graphique, elle s'est donc ouverte en mode compatibilité.",

@@ -1596,7 +1596,7 @@
     "value": "Compatibility mode"
   },
   "prefs.general.compatDesc": {
-    "value": "Draws the window without the graphics card. It's slower but works on any computer. Use it if the window goes black, gets cut off or freezes."
+    "value": "Draws the window in a way that works with more graphics cards, and without the graphics card if that still fails. Use it if the window goes black, gets cut off or freezes."
   },
   "prefs.general.compatReopen": {
     "value": "Takes effect when the app reopens."

@@ -713,9 +713,9 @@ describe("Preferences › General: Compatibility mode (Linux)", () => {
       async (el, host) => {
         expect(compatRow(el)).toEqual({
           title: "Compatibility mode",
-          hint: "Draws the window without the graphics card. It's slower but works on any computer. Use it if the window goes black, gets cut off or freezes.",
+          hint: "Draws the window in a way that works with more graphics cards, and without the graphics card if that still fails. Use it if the window goes black, gets cut off or freezes.",
           switch:
-            "Draws the window without the graphics card. It's slower but works on any computer. Use it if the window goes black, gets cut off or freezes.",
+            "Draws the window in a way that works with more graphics cards, and without the graphics card if that still fails. Use it if the window goes black, gets cut off or freezes.",
           line: null,
         });
         const chosen: boolean[] = [];
@@ -852,7 +852,7 @@ describe("Preferences › General: Compatibility mode (Linux)", () => {
       (el) => compatRow(el)?.hint?.includes("decides this now"),
       (el) => {
         const desc =
-          "Draws the window without the graphics card. It's slower but works on any computer. Use it if the window goes black, gets cut off or freezes.";
+          "Draws the window in a way that works with more graphics cards, and without the graphics card if that still fails. Use it if the window goes black, gets cut off or freezes.";
         expect(compatRow(el)?.hint).toBe(
           `${desc} WEBKIT_DISABLE_DMABUF_RENDERER decides this now. To choose here, quit the app and open it without that variable.`,
         );
