@@ -163,6 +163,32 @@ pub fn set_state(app: &AppHandle, state: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Linux: whether the tray icon shows somewhere. Tauri's tray is an AppIndicator, drawn only by a
+/// StatusNotifier host (KDE's panel, GNOME's AppIndicator extension, Waybar's tray), which registers with the
+/// watcher on the session bus. Without one the icon is nowhere, and a hidden window could not be opened again.
+#[cfg(target_os = "linux")]
+pub fn shown() -> bool {
+    use webkit2gtk::gio;
+    use webkit2gtk::glib::Variant;
+    let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>) else { return false };
+    let args = Variant::from(("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered"));
+    bus.call_sync(
+        Some("org.kde.StatusNotifierWatcher"),
+        "/StatusNotifierWatcher",
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        Some(&args),
+        None,
+        gio::DBusCallFlags::NO_AUTO_START,
+        500,
+        None::<&gio::Cancellable>,
+    )
+    .ok()
+    .and_then(|reply| reply.child_value(0).as_variant())
+    .and_then(|value| value.get::<bool>())
+    .unwrap_or(false)
+}
+
 /// On a Mac, whether the menu bar icon shows (the popover decides: agents here, or the person's choice).
 #[tauri::command]
 pub fn tray_visible(app: AppHandle, window: tauri::Window, show: bool) -> Result<(), String> {

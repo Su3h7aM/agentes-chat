@@ -747,17 +747,20 @@ pub fn run() {
                 api.prevent_close();
                 if window.label() == main_window::LABEL {
                     window_state::remember(window, false);
-                    // Some Linux desktops show no tray icon: there the window stays in reach, minimized. One that
-                    // may be black (its page arrived on the graphics card and never painted) quits instead, so
-                    // opening the app again draws a step safer (graphics.rs `decide`).
+                    // On Linux the window hides when the tray icon shows (its Open brings it back). With no tray
+                    // it stays in reach, minimized. One that may be black (its page arrived on the graphics card
+                    // and never painted) quits instead, so opening the app again draws a step safer
+                    // (graphics.rs `decide`).
                     #[cfg(target_os = "linux")]
                     {
                         if cover::unpainted_on_gpu(window.app_handle()) {
                             begin_quit(window.app_handle().clone());
                             return;
                         }
-                        let _ = window.minimize();
-                        return;
+                        if !tray::shown() {
+                            let _ = window.minimize();
+                            return;
+                        }
                     }
                     // ⌘W in full screen: out of full screen first, so no empty Space stays behind.
                     #[cfg(not(target_os = "linux"))]
