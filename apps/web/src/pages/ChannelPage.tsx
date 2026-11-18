@@ -422,6 +422,7 @@ import { desktopPlatform, thisMac, useDocumentTitle } from "@/lib/desktop";
 import { holdOnScreen } from "@/lib/island";
 import { composes, typingInField } from "@/lib/keys";
 import { lookOf } from "@/lib/look";
+import { retainedOlderTail } from "@/lib/older-pages";
 import { type AgentPanelPlace, agentPanelSearch, threadSearch, useAgentPanel, useThreadPanel } from "@/lib/open-param";
 import { reportPainted } from "@/lib/perf";
 import { useToast } from "@/lib/toast";
@@ -1357,6 +1358,18 @@ function ChannelView({
     anchor.current = null;
     el.scrollTop = el.scrollHeight - a.height + a.top;
   }, [older]);
+  // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
+  // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
+  // reading them they stay, where releasing would move the conversation under them. Never under a page still
+  // loading: asked for from the oldest row before the release, it would land past a gap no one fills.
+  const releaseFarOlder = () => {
+    if (thread || olderState === "loading") return;
+    const tail = retainedOlderTail(older);
+    if (!tail) return;
+    setOlder(tail);
+    setOlderState((s) => (s === "done" ? "idle" : s));
+    qc.setQueryData<OlderPages>(olderKey, { pages: tail, done: false });
+  };
 
   // Every thread with replies is one line under its root; its replies live in the panel.
   const threadLines = useMemo(() => {
@@ -2732,7 +2745,12 @@ function ChannelView({
                               const movedDown = previousTop !== null && e.currentTarget.scrollTop > previousTop;
                               if (near && !stick.current && !(byPerson && movedDown)) return;
                               stick.current = near;
-                              if (near) clearUnseen();
+                              if (near) {
+                                clearUnseen();
+                                // Only the person coming back down: a jump or a range paging back scrolls here too,
+                                // and would let go of the pages it just loaded.
+                                if (byPerson && focusDone && !(adjustFirst && !adjustFound)) releaseFarOlder();
+                              }
                               // The person reached the end by themselves: the answer was read, the hold is over.
                               if (near && byPerson) {
                                 markRead();
