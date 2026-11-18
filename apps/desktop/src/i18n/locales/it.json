@@ -114,6 +114,11 @@
     "pauseHintServer": "Quello che è già in corso finisce normalmente. Il server resta attivo.",
     "resume": "Riprendi gli agenti",
     "open": "Apri agentes.chat",
+    "menu": {
+      "show": "Mostra",
+      "hide": "Nascondi",
+      "quit": "Esci"
+    },
     "prefs": "Preferenze…",
     "quit": "Esci da agentes.chat",
     "pausedFor1h": "In pausa per 1 ora",

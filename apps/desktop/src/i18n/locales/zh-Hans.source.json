@@ -281,6 +281,15 @@
   "tray.open": {
     "value": "Open agentes.chat"
   },
+  "tray.menu.show": {
+    "value": "Show"
+  },
+  "tray.menu.hide": {
+    "value": "Hide"
+  },
+  "tray.menu.quit": {
+    "value": "Quit"
+  },
   "tray.prefs": {
     "value": "Preferences…"
   },

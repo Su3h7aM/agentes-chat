@@ -112,6 +112,11 @@
     "pauseHintServer": "Wat al loopt, eindigt gewoon. De server blijft online.",
     "resume": "De agents hervatten",
     "open": "agentes.chat openen",
+    "menu": {
+      "show": "Tonen",
+      "hide": "Verbergen",
+      "quit": "Afsluiten"
+    },
     "prefs": "Voorkeuren…",
     "quit": "agentes.chat afsluiten",
     "pausedFor1h": "1 uur gepauzeerd",

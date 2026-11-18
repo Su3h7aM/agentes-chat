@@ -112,6 +112,11 @@
     "pauseHintServer": "Was schon läuft, endet normal. Der Server bleibt online.",
     "resume": "Agenten fortsetzen",
     "open": "agentes.chat öffnen",
+    "menu": {
+      "show": "Einblenden",
+      "hide": "Ausblenden",
+      "quit": "Beenden"
+    },
     "prefs": "Einstellungen…",
     "quit": "agentes.chat beenden",
     "pausedFor1h": "Für 1 Stunde pausiert",

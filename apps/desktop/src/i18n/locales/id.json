@@ -110,6 +110,11 @@
     "pauseHintServer": "Yang sudah berjalan selesai seperti biasa. Server tetap menyala.",
     "resume": "Lanjutkan agen",
     "open": "Buka agentes.chat",
+    "menu": {
+      "show": "Tampilkan",
+      "hide": "Sembunyikan",
+      "quit": "Keluar"
+    },
     "prefs": "Preferensi…",
     "quit": "Keluar dari agentes.chat",
     "pausedFor1h": "Dijeda selama 1 jam",

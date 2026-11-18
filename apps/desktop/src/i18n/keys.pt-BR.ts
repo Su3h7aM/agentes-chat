@@ -117,6 +117,11 @@ export const desktopPtBR = {
     pauseHintServer: "O que já está rodando termina normalmente. O servidor segue no ar.",
     resume: "Retomar os agentes",
     open: "Abrir o agentes.chat",
+    menu: {
+      show: "Mostrar",
+      hide: "Ocultar",
+      quit: "Sair",
+    },
     prefs: "Preferências…",
     quit: "Sair do agentes.chat",
     pausedFor1h: "Pausado por 1 hora",
