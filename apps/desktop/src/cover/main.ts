@@ -32,7 +32,7 @@ import { desktopStrings, systemLocale } from "../i18n";
 import { mountReportPanel } from "../report/panel";
 import { type CoverParts, coverReport, knownServers, type ReportFacts } from "../report/report";
 import { elapsedClock, fillIn } from "../ui/time";
-import { stuckAction } from "./stuck";
+import { STUCK_STEPS_MS, stuckAction } from "./stuck";
 
 /** How long the cover waits before it asks whether the site can be reached, and how often after. */
 const CHECK_MS = 3000;
@@ -355,8 +355,16 @@ async function check() {
       return;
     }
   }
-  if (waited < CHECK_MS) return;
-  if (!(await reachable(server))) {
+  // On Linux the cover is the window's own page, not an overlay (cover.rs): the site loads only once the cover
+  // leaves for it, so that happens as soon as the server answers. Not once the page didn't open (`?stuck`): then
+  // the person chooses. The separate cover of macOS and Windows leaves loading to the page behind it.
+  const linux = platform === "linux" && stuckSteps < STUCK_STEPS_MS.length;
+  const early = waited < CHECK_MS;
+  if (early && !linux) return;
+  const answers = await reachable(server);
+  if (answers && !unreachable && linux && (await invoke<boolean>("cover_reveal").catch(() => false))) return;
+  if (early) return;
+  if (!answers) {
     unreachable = true;
     say(unreachableText(server));
     const welcome: [string, () => void] = [
@@ -390,6 +398,11 @@ function stuck(waited: number) {
     void invoke("cover_retry", { fresh: next.action === "fresh", why }).catch(() => {});
     return;
   }
+  sayStuck();
+}
+
+/** The page didn't open: Try again (with the web cache cleared), Copy details, or show it as it is. */
+function sayStuck() {
   say(words.stuck);
   buttons([
     [
@@ -413,5 +426,12 @@ function clockTime(ms: number): string {
   }
 }
 
+// Linux: the window came back to the cover because the site never painted (cover.rs `to_site`).
+if (new URLSearchParams(location.search).has("stuck")) {
+  stuckSteps = STUCK_STEPS_MS.length;
+  sayStuck();
+}
+// Linux's cover asks at once: the site only starts loading when it does.
+if (platform === "linux") void check();
 setInterval(() => void check(), CHECK_MS);
 setInterval(tick, 1000);

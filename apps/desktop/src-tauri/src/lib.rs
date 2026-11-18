@@ -829,6 +829,7 @@ pub fn run() {
             cover::page_ready,
             cover::cover_retry,
             cover::cover_hide,
+            cover::cover_reveal,
             cover::cover_server,
             cover::cover_details,
             prepare::screen_access,
@@ -905,7 +906,7 @@ pub fn run() {
         let app = webview.app_handle();
         health::note(app, &format!("the web process of {} ended: loading it again", webview.label()));
         if webview.label() == main_window::LABEL {
-            cover::show(app);
+            cover::show(app, std::time::Duration::ZERO);
         }
         let _ = webview.reload();
     });

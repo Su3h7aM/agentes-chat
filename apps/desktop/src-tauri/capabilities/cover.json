@@ -6,6 +6,7 @@
     "core:window:allow-start-dragging",
     "allow-cover-retry",
     "allow-cover-hide",
+    "allow-cover-reveal",
     "allow-cover-server",
     "allow-cover-details",
     "allow-servers-get",
