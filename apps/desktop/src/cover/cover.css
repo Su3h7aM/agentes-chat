@@ -26,6 +26,8 @@
   inset: 0;
   width: 100%;
   height: 100%;
+  /* The sky draws one pixel per four CSS pixels: without this, the browser smooths the upscale and it looks blurry. */
+  image-rendering: pixelated;
 }
 .cover__in {
   position: relative;
@@ -39,6 +41,7 @@
 .cover__agent {
   width: 72px;
   height: 72px;
+  image-rendering: pixelated;
 }
 .cover__word {
   margin: 0;
