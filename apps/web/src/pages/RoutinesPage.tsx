@@ -133,6 +133,7 @@ import {
   Tip,
   Toolbar,
   useAutoGrow,
+  useNow as useUiNow,
   zonedInstant,
 } from "@agenteschat/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -219,15 +220,8 @@ const HORIZON_BACK = 4 * 3_600_000;
 const HORIZON_AHEAD = 20 * 3_600_000;
 const RUN_SLOTS = 14;
 
-/** "now", ticking every minute ("próxima em 10 min" stays true). */
-function useNow() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
+/** "now", ticking every minute ("próxima em 10 min" stays true). Paused while the tab is hidden. */
+const useNow = () => new Date(useUiNow(60_000));
 
 function useTargetLabel() {
   const { t } = useTranslation();

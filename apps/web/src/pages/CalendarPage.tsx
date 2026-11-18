@@ -41,6 +41,7 @@ import {
   Segmented,
   Toolbar,
   useDelayed,
+  useNow as useUiNow,
 } from "@agenteschat/ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -108,7 +109,8 @@ export function CalendarPage({ today: todayProp, day }: { today?: Date; day?: st
   const action = useCalendarAction(org.id);
   const reminders = useReminderAction(org.id);
   const [today] = useState(() => todayProp ?? new Date());
-  const [now, setNow] = useState(() => new Date());
+  // The current-time line moves every minute; the shared clock pauses while the tab is hidden.
+  const now = new Date(useUiNow(60_000));
   // A phone's width holds one day's column, not a week of seven unreadable ones.
   const [view, setView] = useState<CalendarView>(() => (matchesNow(PHONE_QUERY) ? "day" : "week"));
   // A link to an event (an invitation's email) says its day, so the view starts on its week.
@@ -123,12 +125,6 @@ export function CalendarPage({ today: todayProp, day }: { today?: Date; day?: st
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ draft: EventDraft | null; event: CalendarEvent | null } | null>(null);
   const [ask, setAsk] = useState<SeriesAsk | null>(null);
-
-  // The current-time line moves every minute.
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
 
   const days = viewDays(view, focus, businessOnly);
   const { from, to } = viewRange(view, focus);
