@@ -180,7 +180,9 @@ function wake() {
 
 function context2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   try {
-    const ctx = canvas.getContext("2d");
+    // A software canvas: every frame is our own pixels (`putImageData`), and WebKitGTK 2.54 scales a canvas drawn on
+    // the graphics card with smoothing whatever its `image-rendering: pixelated` says, blurring the sky.
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     return ctx && typeof ctx.createImageData === "function" ? ctx : null;
   } catch {
     return null;
