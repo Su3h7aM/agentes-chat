@@ -592,9 +592,11 @@ export function RealtimeProvider({
     };
   }, [orgId, createSocket, qc]);
 
-  // Resync what the server never confirmed instead of spinning forever.
+  // Resync what the server never confirmed instead of spinning forever. Paused while the tab is hidden
+  // (the resync on return to a visible tab in `useChannelRealtime` covers the gap).
   useEffect(() => {
     const timer = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       for (const channelId of streams.sweep()) {
         void qc.invalidateQueries({ queryKey: ["org", orgId, "channel", channelId] });
       }

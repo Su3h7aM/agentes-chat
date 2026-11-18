@@ -8,9 +8,9 @@ import type {
 import { engineOfExecutor } from "@agenteschat/client/lib/brain";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
 import { executorOnText, type PlanCell, tickFor } from "@agenteschat/client/lib/missions";
-import { Chip, type IconName, PlanStrip, ProviderLogo, Select } from "@agenteschat/ui";
+import { Chip, type IconName, PlanStrip, ProviderLogo, Select, useNow as useUiNow } from "@agenteschat/ui";
 import type { TFunction } from "i18next";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AgentAvatar, AgentSpinner } from "@/components/AgentAvatar";
 import { MachineIcon } from "@/components/machine-bits";
@@ -119,30 +119,15 @@ export function CommandApprovalSelect({
   );
 }
 
-/** Re-renders every `ms` while `active` (live durations). */
+/** Re-renders every `ms` while `active` (live durations). Shares the UI's timer per cadence; paused while hidden. */
 export function useNow(active: boolean, ms = 1000) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(timer);
-  }, [active, ms]);
-  return now;
+  return useUiNow(active ? ms : false);
 }
 
-/** A clock for "há 58 s": every second at first, coarser as the time grows (`tickFor`). */
+/** A clock for "há 58 s": every second at first, coarser as the time grows (`tickFor`). Held while inactive or hidden. */
 export function useElapsedNow(since: string | null | undefined, active: boolean) {
   const start = since ? Date.parse(since) : Number.NaN;
-  const [now, setNow] = useState(() => Date.now());
-  const ms = tickFor(Number.isFinite(start) ? (now - start) / 1000 : 0);
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(timer);
-  }, [active, ms]);
-  return now;
+  return useUiNow((now) => (active ? tickFor(Number.isFinite(start) ? (now - start) / 1000 : 0) : false));
 }
 
 /** "4 de 12 itens" as pixels, in the mission agent's own tones; `titles` (the items') give each cell a tooltip. */
