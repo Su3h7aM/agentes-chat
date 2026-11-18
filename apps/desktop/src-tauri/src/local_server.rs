@@ -2677,7 +2677,9 @@ fn erase(app: &AppHandle) -> Result<String, String> {
 // ───────────────────────────── commands ─────────────────────────────
 
 pub(crate) fn app_window(webview: &tauri::Webview, allowed: &[&str]) -> Result<(), String> {
-    if allowed.contains(&webview.label()) {
+    // The cover is asked for by its label; on Linux it is the main window's own page (cover.rs `main_on_cover`).
+    let cover = allowed.contains(&crate::cover::LABEL) && crate::cover::main_on_cover(webview);
+    if cover || allowed.contains(&webview.label()) {
         Ok(())
     } else {
         Err("only the app's own windows ask this".into())
@@ -2685,7 +2687,7 @@ pub(crate) fn app_window(webview: &tauri::Webview, allowed: &[&str]) -> Result<(
 }
 
 /// The welcome, the popover, Preferences and the main window's cover.
-const ANY: &[&str] = &["welcome", "popover", "prefs", "main-cover"];
+const ANY: &[&str] = &["welcome", "popover", "prefs", crate::cover::LABEL];
 
 #[tauri::command]
 pub fn local_server_status(app: AppHandle, webview: tauri::Webview) -> Result<Status, String> {
@@ -2844,7 +2846,7 @@ pub async fn local_server_restart(app: AppHandle, webview: tauri::Webview) -> Re
 /// Reach on or off; the main window follows the address, signed in. The reason when it didn't turn on.
 #[tauri::command]
 pub async fn local_server_reach(app: AppHandle, webview: tauri::Webview, on: bool) -> Result<Value, String> {
-    app_window(&webview, &["prefs", "main-cover"])?;
+    app_window(&webview, &["prefs", crate::cover::LABEL])?;
     tauri::async_runtime::spawn_blocking(move || {
         let server = app.state::<LocalServer>();
         let _busy = server.busy.lock().unwrap_or_else(|e| e.into_inner());

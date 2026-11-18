@@ -228,4 +228,16 @@ describe("each window may call every app command its code calls", () => {
     const refused = called.map((command) => [command, refusal("main-cover", command)]).filter(([, why]) => why);
     expect(Object.fromEntries(refused)).toEqual({});
   });
+
+  test("the Linux cover can use the report panel", () => {
+    const linuxCover = JSON.parse(read(join(CAPABILITIES, "cover-main.json")));
+    expect(linuxCover.webviews).toEqual(["main"]);
+    expect(linuxCover.platforms).toEqual(["linux"]);
+    expect(linuxCover.local).toBe(true);
+    for (const command of ["problem_report_parts", "problem_report_on", "problem_report_send"]) {
+      expect(linuxCover.permissions).toContain(permission(command));
+      expect(ANSWERS.get(command)).toContain("main-cover");
+    }
+    expect(rust).toContain('allowed.contains(&"main-cover") && crate::cover::main_on_cover(webview)');
+  });
 });

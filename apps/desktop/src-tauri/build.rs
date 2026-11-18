@@ -39,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "page_ready",
     "cover_retry",
     "cover_hide",
+    "cover_reveal",
     "cover_server",
     "cover_details",
     "this_mac_listening",

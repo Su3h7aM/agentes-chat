@@ -90,7 +90,18 @@ fn outside_or_drop(url: &Url) -> Route {
     }
 }
 
+/// The app's cover page, where the window opens on Linux (cover.rs) and comes back to when the site never paints.
+/// Only that page and only there: any other app page in the main window would get the cover's commands.
+fn is_cover_page(url: &Url) -> bool {
+    let app = url.scheme() == "tauri"
+        || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"));
+    crate::cover::opens_in_page() && app && crate::cover::on_cover_page(url)
+}
+
 fn route(url: &Url, site: &Url) -> Route {
+    if is_cover_page(url) {
+        return Route::Stay;
+    }
     match url.scheme() {
         "http" | "https" if same_site(url, site) => match url.path() {
             BROWSER_SIGN_IN | GITHUB_APP_MANIFEST => Route::Outside,
@@ -186,6 +197,13 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
     // The window holds two web views (the site, and the app's cover over it), so it is found by its parts.
     // Already open: never a reload (where the person was, drafts, scroll stay), only the route moves.
     if let Some(page) = app.get_webview(LABEL) {
+        // Linux opens on the cover page: a link that arrived meanwhile goes to the site as a whole page.
+        if page.url().is_ok_and(|u| crate::cover::on_cover_page(&u)) {
+            if let Some(url) = url {
+                page.navigate(url).map_err(|e| e.to_string())?;
+            }
+            return front(app);
+        }
         if let Some(js) = url.as_ref().and_then(go_in_page) {
             page.eval(js).map_err(|e| e.to_string())?;
         }
@@ -204,13 +222,18 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
         .get_webview_window("popover")
         .and_then(|w| w.theme().ok())
         .unwrap_or(Theme::Light);
-    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(url.unwrap_or_else(|| site.clone())))
+    let start = match (crate::cover::opens_in_page(), url.as_ref()) {
+        // The cover is the only web view on Linux, so it starts there and leaves for the site when it can.
+        (true, None) => WebviewUrl::App("cover.html".into()),
+        _ => WebviewUrl::External(url.clone().unwrap_or_else(|| site.clone())),
+    };
+    let builder = WebviewWindowBuilder::new(app, LABEL, start)
         .title("agentes.chat")
         .min_inner_size(960.0, 600.0)
         // As the person left it (window_state.rs), on a screen that is still there.
         .inner_size(saved.width.unwrap_or(1240.0), saved.height.unwrap_or(800.0))
         .prevent_overflow()
-        // Two web views share the window (the site and the cover): each follows its size.
+        // The site (and, where a separate cover is used, the cover) follows the window's size.
         .auto_resize()
         // Files dragged from Finder (into a conversation, the Drive) and drags inside the page go to the site;
         // Tauri's own drop handling would take every drag first and the page would get nothing.
@@ -1350,6 +1373,19 @@ mod tests {
         let cloud = "https://app.agentes.chat";
         assert_eq!(r("https://app.agentes.chat/help/memory?lang=en#learns", cloud), Route::Outside);
         assert_eq!(r("https://app.agentes.chat/org/x", cloud), Route::Stay);
+    }
+
+    #[test]
+    fn only_the_cover_page_of_the_app_stays_and_only_on_linux() {
+        let own = "https://agentes.tail1234.ts.net";
+        let linux = cfg!(target_os = "linux");
+        for cover in ["tauri://localhost/cover.html", "http://tauri.localhost/cover.html?stuck"] {
+            assert_eq!(r(cover, own) == Route::Stay, linux, "{cover}");
+        }
+        // Another app page would get the cover's commands in the main window.
+        assert_eq!(r("tauri://localhost/welcome.html", own), Route::Drop);
+        assert_eq!(r("http://tauri.localhost/prefs.html", own), Route::Outside);
+        assert_eq!(r("https://evil.example/cover.html", own), Route::Outside);
     }
 
     #[test]

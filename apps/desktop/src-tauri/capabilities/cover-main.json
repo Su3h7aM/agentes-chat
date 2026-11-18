@@ -1,0 +1,27 @@
+{
+  "identifier": "cover-main",
+  "description": "On Linux the main window starts on the cover page (cover.rs), in its only web view: it may drag the window, ask which server is open, load it again once it is reachable, or step aside; for the server here, start it, turn reach off, copy its details, read Tailscale's state (whether there is its app to open) or open Tailscale; for a server out of reach or the server here stopped, open the welcome window or another server of the app's list. Only for the app's own (local) pages, never the site's.",
+  "webviews": ["main"],
+  "platforms": ["linux"],
+  "local": true,
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "allow-cover-retry",
+    "allow-cover-hide",
+    "allow-cover-reveal",
+    "allow-cover-server",
+    "allow-cover-details",
+    "allow-servers-get",
+    "allow-server-choose",
+    "allow-local-server-status",
+    "allow-local-server-start",
+    "allow-local-server-reach",
+    "allow-local-server-diagnostics",
+    "allow-problem-report-parts",
+    "allow-problem-report-on",
+    "allow-problem-report-send",
+    "allow-show-window",
+    "allow-tailscale-status",
+    "allow-tailscale-open"
+  ]
+}
