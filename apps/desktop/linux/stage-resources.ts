@@ -29,7 +29,9 @@ for (const file of configs) {
 
 let copied = 0;
 for (const [from, to] of wanted) {
-  const matches = [...new Bun.Glob(basename(from)).scanSync({ cwd: resolve(tauriDir, dirname(from)), onlyFiles: false })];
+  const matches = [
+    ...new Bun.Glob(basename(from)).scanSync({ cwd: resolve(tauriDir, dirname(from)), onlyFiles: false }),
+  ];
   if (matches.length === 0) {
     console.error(`stage-resources: nothing matches ${from}`);
     process.exit(1);

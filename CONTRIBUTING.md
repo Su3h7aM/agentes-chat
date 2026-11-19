@@ -29,21 +29,24 @@ Give development a database of its own, never a production one. To run the produ
 instead, build it and start it with the compose file ([SELF_HOSTING.md](SELF_HOSTING.md), "From
 source"). The phone app builds on EAS ([apps/mobile/README.md](apps/mobile/README.md)) and the
 desktop app (macOS, Windows and Linux) in the Desktop workflow (`.github/workflows/desktop.yml`).
+The Linux AppImage builds on your machine with `docker` (or podman's): `bun run desktop:appimage` writes it to
+`apps/desktop/src-tauri/target/release/bundle/appimage/` ([ADR 0259](docs/adr/0259-linux-appimage-anylinux.md)); it
+shares your Cargo and Bun caches.
 
 ## Checks
 
 CI does not start by itself on a pull request: a maintainer runs it on the branch before merging. These must pass:
 
-| Check | Command |
-| --- | --- |
-| Lint and format (Biome) | `bun run lint` (`bun run format` fixes what it can) |
-| `apps/` and `packages/` never import Cloud or `ee` code; comments and docs cite ADRs, not the maintainers' private notes | `bun run check:boundaries` |
-| No npm dependency under GPL, AGPL, a source-available or proprietary license, or none | `bun run check:licenses` |
-| Typecheck | `bun run typecheck` |
-| Build | `bun run build` |
-| Migrations match the schema | `bun run db:generate <name>` creates nothing |
-| Tests | `bun test <paths>` |
-| No secrets in the history | gitleaks, with `.gitleaks.toml` |
+| Check                                                                                                                    | Command                                             |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| Lint and format (Biome)                                                                                                  | `bun run lint` (`bun run format` fixes what it can) |
+| `apps/` and `packages/` never import Cloud or `ee` code; comments and docs cite ADRs, not the maintainers' private notes | `bun run check:boundaries`                          |
+| No npm dependency under GPL, AGPL, a source-available or proprietary license, or none                                    | `bun run check:licenses`                            |
+| Typecheck                                                                                                                | `bun run typecheck`                                 |
+| Build                                                                                                                    | `bun run build`                                     |
+| Migrations match the schema                                                                                              | `bun run db:generate <name>` creates nothing        |
+| Tests                                                                                                                    | `bun test <paths>`                                  |
+| No secrets in the history                                                                                                | gitleaks, with `.gitleaks.toml`                     |
 
 `bun run ci:local` runs all of these in CI's order and prints a PASS/FAIL table (it needs `shellcheck` and
 `gitleaks` installed). Booting the image with `docker-compose.yml` is the one CI check it leaves out.

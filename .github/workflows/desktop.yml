@@ -12,7 +12,7 @@ name: Desktop
 #   Windows  agentes_<v>_x64-setup.exe, agentes_<v>_arm64-setup.exe (+ .sha256, + .sig: the installer is its own
 #            updater bundle)
 #   Linux    agentes_<v>_{amd64,arm64}.deb (+ .sha256), agentes_<v>_{amd64,arm64}.AppImage (+ .sha256, + .sig)
-# Every app carries the runner, agent-browser (ADR 0040) and agent-desktop (ADR 0258), and the server's own files, built once from the
+# Every app carries the runner and agent-browser (ADR 0040), and the server's own files, built once from the
 # same commit (the `server` job: JavaScript and WebAssembly, the same on every system), for "Run agentes.chat
 # on this computer" (ADR 0066; tauri.native.conf.json adds them to the resources). `none` only builds the
 # current version as artifacts. `platforms` can leave systems out, also from a release: the server gives each
@@ -184,7 +184,7 @@ jobs:
         run: |
           bun scripts/native-package.ts folders --out "$RUNNER_TEMP/native"
           rm -rf native
-          mv "$RUNNER_TEMP"/native/agentes/* native
+          mv "$RUNNER_TEMP"/native/agentes/*/* native
           test -s native/server/native.js
           test -s native/web/index.html
           du -sh native/server native/web native/licenses/npm
@@ -312,19 +312,6 @@ jobs:
           chmod +x "$BIN_DIR"/agent-browser-*
           lipo -info "$BIN_DIR/agent-browser-universal-apple-darwin"
 
-      # agent-desktop ships next to the runner too (ADR 0258), with its macOS helper beside it: the pinned
-      # release, checked against machine-protocol.ts's SHA-256, lipo'd for the universal build. Tauri re-signs
-      # both with the Developer ID, so macOS credits Accessibility to the agentes.chat app.
-      - name: Fetch agent-desktop
-        shell: bash
-        run: |
-          bun apps/desktop/scripts/fetch-agent-desktop.ts "$BIN_DIR" aarch64-apple-darwin x86_64-apple-darwin
-          for name in agent-desktop agent-desktop-macos-helper; do
-            lipo -create -output "$BIN_DIR/$name-universal-apple-darwin" \
-              "$BIN_DIR/$name-aarch64-apple-darwin" "$BIN_DIR/$name-x86_64-apple-darwin"
-            lipo -info "$BIN_DIR/$name-universal-apple-darwin"
-          done
-
       # The server's files (the `server` job), among the app's resources (tauri.native.conf.json).
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -398,10 +385,6 @@ jobs:
           codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/agentes-runner"
           codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/agent-browser"
           "$APP/Contents/MacOS/agent-browser" --version
-          codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/agent-desktop"
-          codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/agent-desktop-macos-helper"
-          "$APP/Contents/MacOS/agent-desktop" --version
-          test -s "$APP/Contents/Resources/licenses/agent-desktop/LICENSE"
           test -s "$APP/Contents/Resources/licenses/agent-browser/LICENSE"
           test -s "$APP/Contents/Resources/licenses/bun/LICENSE.md"
           test -s "$APP/Contents/Resources/LICENSE"
@@ -515,12 +498,6 @@ jobs:
           echo "$SHA  $OUT" | sha256sum -c -
           "$OUT" --version
 
-      - name: Fetch agent-desktop
-        shell: bash
-        run: |
-          bun apps/desktop/scripts/fetch-agent-desktop.ts "$BIN_DIR" ${{ matrix.triple }}
-          "$BIN_DIR/agent-desktop-${{ matrix.triple }}.exe" --version
-
       # The server's files (the `server` job), among the app's resources (tauri.native.conf.json).
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -569,8 +546,6 @@ jobs:
           RELEASE=apps/desktop/src-tauri/target/release
           test -s "$RELEASE/agentes-runner.exe"
           test -s "$RELEASE/agent-browser.exe"
-          test -s "$RELEASE/agent-desktop.exe"
-          test -s "$RELEASE/licenses/agent-desktop/LICENSE"
           test -s "$RELEASE/server/native.js"
           test -s "$RELEASE/web/index.html"
           test -s "$RELEASE/licenses/bun/LICENSE.md"
@@ -601,8 +576,9 @@ jobs:
   linux:
     needs: [version, server]
     if: ${{ contains(fromJSON('["all", "macos+linux", "linux"]'), inputs.platforms || 'all') }}
-    # 22.04: an older glibc, so the app runs on more distributions. One runner per architecture: each build runs what
-    # it makes. `pkg`: the architecture in the files' names (Debian's).
+    # The deb is built here on 22.04 (an older glibc: a deb links the system's libraries). The AppImage is built in an
+    # Arch container by apps/desktop/linux/build-appimage.sh and carries its own libraries (ADR 0259). One runner per
+    # architecture: each build runs what it makes. `pkg`: the architecture in the files' names (Debian's).
     strategy:
       fail-fast: false
       matrix:
@@ -619,7 +595,7 @@ jobs:
             browser: linux-arm64
             pkg: arm64
     runs-on: ${{ matrix.arch == 'arm64' && (vars.CI_RUNNER_UBUNTU_22_ARM || 'ubuntu-22.04-arm') || (vars.CI_RUNNER_UBUNTU_22 || 'ubuntu-22.04') }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       BIN_DIR: apps/desktop/src-tauri/binaries
       VERSION: ${{ needs.version.outputs.version }}
@@ -628,12 +604,17 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.ref }}
 
+      # The AppImage is named agentes_<version>_<arch> only when HEAD is at the release's tag (build-appimage.sh), and a
+      # checkout of a commit has no tags.
+      - name: Fetch the release tag
+        if: ${{ needs.version.outputs.tag != '' }}
+        run: git fetch --depth=1 origin "refs/tags/${{ needs.version.outputs.tag }}:refs/tags/${{ needs.version.outputs.tag }}"
+
       - name: System libraries
         run: |
           sudo apt-get update -qq
-          # libfuse2: the AppImage bundler's own tool is an AppImage.
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            libxdo-dev libssl-dev patchelf file libfuse2
+            libxdo-dev libssl-dev file
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -668,10 +649,6 @@ jobs:
           echo "$SHA  $OUT" | sha256sum -c -
           chmod +x "$OUT"
 
-      - name: Fetch agent-desktop
-        shell: bash
-        run: bun apps/desktop/scripts/fetch-agent-desktop.ts "$BIN_DIR" ${{ matrix.triple }}
-
       # The server's files (the `server` job), among the app's resources (tauri.native.conf.json).
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -696,38 +673,47 @@ jobs:
           bun scripts/icons.ts
           bun run tauri icon app-icon-tile.png
 
-      - name: Build the app (AppImage, deb)
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+      - name: Build the deb
+        working-directory: apps/desktop
+        run: bun run tauri build --config src-tauri/tauri.native.conf.json --verbose
+
+      # The container shares the host's caches (apps/desktop/linux/appimage.sh): Cargo's registry and git are the ones
+      # rust-cache above keeps, and its own target folder (target/anylinux) is inside the target folder it keeps, so
+      # only Bun's install cache is added here.
+      - name: Cache Bun's downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ matrix.arch }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ matrix.arch }}-
+
+      # The AppImage, built in the pinned Arch image (ADR 0259) from this commit. The updater signature (.sig) is made
+      # there with the Tauri key.
+      - name: Build the AppImage
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # linuxdeploy's patchelf, except on the two sidecars: they keep their bytes in the AppImage too.
-          PATCHELF: ${{ github.workspace }}/apps/desktop/scripts/patchelf-keep-sidecars.sh
-        with:
-          projectPath: apps/desktop
-          tauriScript: bun run tauri
-          # --verbose: without it a failed AppImage says only "failed to run linuxdeploy", never which file or step.
-          args: --config src-tauri/tauri.native.conf.json --verbose
+        run: |
+          bash apps/desktop/linux/appimage.sh
+          test -s apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
 
-      - name: Name the build files and the checksums
+      - name: Name the deb and the checksums
         shell: bash
         run: |
           BUNDLE=apps/desktop/src-tauri/target/release/bundle
           DEB=$(ls "$BUNDLE"/deb/*.deb | head -1)
-          APPIMAGE=$(ls "$BUNDLE"/appimage/*.AppImage | head -1)
-          if [ -z "$DEB" ] || [ -z "$APPIMAGE" ] || [ ! -s "$APPIMAGE.sig" ]; then
-            echo "::error::No deb, AppImage or its updater signature in $BUNDLE"
+          if [ -z "$DEB" ] || [ -z "$(ls "$BUNDLE"/appimage/*.AppImage)" ]; then
+            echo "::error::No deb or no AppImage in $BUNDLE"
             exit 1
           fi
           mkdir -p out
-          PKG=${{ matrix.pkg }}
-          cp "$DEB" "out/agentes_${VERSION}_$PKG.deb"
-          cp "$APPIMAGE" "out/agentes_${VERSION}_$PKG.AppImage"
-          cp "$APPIMAGE.sig" "out/agentes_${VERSION}_$PKG.AppImage.sig"
-          (cd out && for f in "agentes_${VERSION}_$PKG.deb" "agentes_${VERSION}_$PKG.AppImage"; do sha256sum "$f" > "$f.sha256"; done)
+          cp "$BUNDLE"/appimage/* out/
+          cp "$DEB" "out/agentes_${VERSION}_${{ matrix.pkg }}.deb"
+          (cd out && sha256sum "agentes_${VERSION}_${{ matrix.pkg }}.deb" > "agentes_${VERSION}_${{ matrix.pkg }}.deb.sha256")
           ls -l out
 
-      # What the deb puts on the computer: the two sidecars and the server's files (the AppImage has the same).
+      # What the deb puts on the computer: the sidecars and the server's files (the AppImage has the same).
       - name: Check the app's files
         shell: bash
         run: |
@@ -736,21 +722,22 @@ jobs:
             grep -q -- "$f\$" deb.txt || { echo "::error::$f is not in the deb"; exit 1; }
           done
 
-      # The AppImage's sidecars are the ones built above, byte for byte (linuxdeploy rewrites any file it gives an
-      # rpath; patchelf-keep-sidecars.sh keeps it off these two), and the runner still starts.
-      - name: Check the AppImage's sidecars
+      # The AppImage carries the server's files and the runner, which still starts. They sit beside the app's
+      # executable, in the AppImage's bin/ and lib/.
+      - name: Check the AppImage's files
         shell: bash
         run: |
-          APPIMAGE="$PWD/out/agentes_${VERSION}_${{ matrix.pkg }}.AppImage"
+          APPIMAGE=$(ls "$PWD"/out/*.AppImage)
           dir=$(mktemp -d)
-          (cd "$dir" && "$APPIMAGE" --appimage-extract > /dev/null)
+          (cd "$dir" && APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract > /dev/null)
+          test -s "$dir/squashfs-root/lib/agentes.chat/server/native.js"
           for name in agentes-runner agent-browser agent-desktop; do
-            cmp "$BIN_DIR/$name-${{ matrix.triple }}" "$dir/squashfs-root/usr/bin/$name" \
+            cmp "$BIN_DIR/$name-${{ matrix.triple }}" "$dir/squashfs-root/bin/$name" \
               || { echo "::error::The AppImage's $name isn't the one built"; exit 1; }
           done
-          "$dir/squashfs-root/usr/bin/agentes-runner" --version
+          "$dir/squashfs-root/bin/agentes-runner" --version
           echo '{"text":"git push origin main","how":"ask","code":false}' \
-            | "$dir/squashfs-root/usr/bin/agentes-runner" script-check | grep -q '"pushes":\['
+            | "$dir/squashfs-root/bin/agentes-runner" script-check | grep -q '"pushes":\[
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -764,7 +751,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get install -y -qq xvfb imagemagick dbus
-          APPIMAGE="$PWD/out/agentes_${VERSION}_${{ matrix.pkg }}.AppImage"
+          # No FUSE needed on the runner.
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          APPIMAGE=$(ls "$PWD"/out/*.AppImage)
           mkdir -p look
           look() {
             local name=$1 home

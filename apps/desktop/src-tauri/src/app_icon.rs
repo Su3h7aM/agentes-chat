@@ -1,10 +1,11 @@
 //! The app icon the person picked on this computer (ADR 0179), from the site's Settings › Account › This device
-//! (`this_mac` `appIcon`): the Dock's icon on macOS and the windows' (the taskbar's) on Windows and Linux, while
-//! the app runs. The bundle keeps the default one, so Finder, Launchpad and the Dock of a closed app show that:
-//! changing the bundle would break its signature. Kept in `app-icon.json` (the app's config folder) and shown again
-//! at launch and whenever a window is made. The ids are the site's (packages/client `app-icons.ts`); the images come
-//! from packages/ui/scripts/app-icons.mjs. The pick can also be one of a workspace's agents: the site draws it (it
-//! has the agent engine) and sends both pictures, kept beside the choice, so the Dock shows it on every server.
+//! (`this_mac` `appIcon`): the Dock's icon on macOS, the windows' (the taskbar's) and the tray's on Windows and
+//! Linux, while the app runs. The bundle keeps the default one, so Finder, Launchpad and the Dock of a closed app
+//! show that: changing the bundle would break its signature. Kept in `app-icon.json` (the app's config folder) and
+//! shown again at launch and whenever a window is made. The ids are the site's (packages/client `app-icons.ts`); the
+//! images come from packages/ui/scripts/app-icons.mjs. The pick can also be one of a workspace's agents: the site
+//! draws it (it has the agent engine) and sends both pictures, kept beside the choice, so the Dock shows it on every
+//! server.
 
 use std::path::PathBuf;
 
@@ -185,6 +186,118 @@ fn apply(app: &AppHandle, picked: Picked) {
     if let Ok(image) = tauri::image::Image::from_bytes(&bytes) {
         for window in app.webview_windows().values() {
             let _ = window.set_icon(image.clone());
+        }
+        // The tray shows the same picture as the windows (tray.rs).
+        crate::tray::set_app_icon(app, image);
+    }
+    #[cfg(target_os = "linux")]
+    if let Err(err) = linux::keep_entry(app, &bytes) {
+        eprintln!("agentes.chat: no desktop entry for the window's icon: {err}");
+    }
+}
+
+/// On Wayland a window has no icon of its own (GTK 3 can't send one): the compositor shows the icon of the desktop
+/// entry named by the window's `app_id`, the app's identity (`APP_ID`, the name the AppImage's entry carries). So the
+/// pick is kept as a hidden entry of that name in the user's applications folder, with the picture beside it: the
+/// compositor reads it the next time a window opens.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::{fs, io, path::Path};
+
+    use tauri::{AppHandle, Manager};
+
+    use crate::APP_ID;
+
+    /// A path as a quoted `Exec` argument: `"`, `` ` ``, `$` and `\` escaped, `%` doubled (desktop entry
+    /// specification).
+    fn quoted(path: &str) -> String {
+        let mut out = String::from("\"");
+        for c in path.chars() {
+            match c {
+                '"' | '`' | '$' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '%' => out.push_str("%%"),
+                _ => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// The entry: hidden from menus (the package or the AppImage's own entry is what people launch), named only so
+    /// that the compositor finds the window's icon. `Icon=` is a path, so any picture the person picked works.
+    pub(super) fn entry_text(exec: &str, icon: &str) -> String {
+        format!(
+            "[Desktop Entry]\nType=Application\nName=agentes.chat\nExec={} %u\nIcon={icon}\nTerminal=false\n\
+             NoDisplay=true\nStartupWMClass={APP_ID}\n",
+            quoted(exec)
+        )
+    }
+
+    /// A short name for a picture's bytes (FNV-1a), so a new pick is a new file: a compositor caches an icon by path.
+    fn fingerprint(bytes: &[u8]) -> String {
+        let hash = bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+        format!("{hash:016x}")
+    }
+
+    /// Writes `path` only when its text differs: every rewrite makes the desktop rebuild its application list.
+    fn write_if_changed(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if fs::read(path).ok().as_deref() == Some(bytes) {
+            return Ok(());
+        }
+        fs::write(path, bytes)
+    }
+
+    pub(super) fn keep_entry(app: &AppHandle, png: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let applications = app.path().data_dir()?.join("applications");
+        let pictures = app.path().app_data_dir()?;
+        fs::create_dir_all(&applications)?;
+        fs::create_dir_all(&pictures)?;
+        let prefix = format!("{APP_ID}-");
+        let picture = pictures.join(format!("{prefix}{}.png", fingerprint(png)));
+        write_if_changed(&picture, png)?;
+        // The earlier picks' files go; the current one stays.
+        for entry in fs::read_dir(&pictures)?.flatten() {
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            if file.starts_with(&prefix) && file.ends_with(".png") && entry.path() != picture {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+        // What the entry starts: the AppImage itself (the mounted copy goes away), else the running binary.
+        let exec = match app.env().appimage {
+            Some(appimage) => appimage,
+            None => tauri::utils::platform::current_exe()?.into_os_string(),
+        };
+        let text = entry_text(&exec.to_string_lossy(), &picture.to_string_lossy());
+        write_if_changed(&applications.join(format!("{APP_ID}.desktop")), text.as_bytes())?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_entry_carries_the_programs_name_and_the_picture() {
+            let text = entry_text("/home/me/My Apps/agentes.AppImage", "/home/me/.local/share/x/agentes-chat-1.png");
+            assert!(text.contains("\nStartupWMClass=agentes-chat\n"));
+            assert!(text.contains("\nIcon=/home/me/.local/share/x/agentes-chat-1.png\n"));
+            assert!(text.contains("\nExec=\"/home/me/My Apps/agentes.AppImage\" %u\n"));
+            assert!(text.contains("\nNoDisplay=true\n"));
+        }
+
+        #[test]
+        fn a_path_cannot_leave_its_quotes() {
+            assert_eq!(quoted(r#"/a"b$c`d\e%f"#), r#""/a\"b\$c\`d\\e%%f""#);
+        }
+
+        #[test]
+        fn a_new_picture_is_a_new_name() {
+            assert_ne!(fingerprint(b"one"), fingerprint(b"two"));
+            assert_eq!(fingerprint(b"one"), fingerprint(b"one"));
         }
     }
 }
