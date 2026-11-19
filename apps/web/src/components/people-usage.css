@@ -245,6 +245,7 @@ th.pu-num .pu-sort {
   right: 0;
   top: 0;
   bottom: 0;
+  margin: 0;
   transform: none;
   width: min(480px, 100%);
   max-height: none;

@@ -17,15 +17,16 @@ export function useGrowFrom(open: boolean, card: RefObject<HTMLElement | null>, 
       if (!dialog) return;
       const end = dialog.getBoundingClientRect();
       if (!end.width || !end.height) return;
-      const x = start.left - innerWidth / 2;
-      const y = start.top - innerHeight / 2;
+      // The dialog is centered by layout, so its end is no transform and its start is the offset from its box.
+      const x = start.left - end.left;
+      const y = start.top - end.top;
       dialog.animate(
         [
           {
             transformOrigin: "0 0",
             transform: `translate(${x}px, ${y}px) scale(${start.width / end.width}, ${start.height / end.height})`,
           },
-          { transformOrigin: "0 0", transform: "translate(-50%, -50%)" },
+          { transformOrigin: "0 0", transform: "none" },
         ],
         { duration: 420, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
       );

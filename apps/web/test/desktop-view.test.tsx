@@ -1519,7 +1519,8 @@ describe("the dialog's size (computer.css)", () => {
     expect(rule(text, ".cmp-prep > :first-child")).toContain("margin-top: auto");
     expect(rule(text, ".cmp-prep > :last-child")).toContain("margin-bottom: auto");
     // Centred like every state: no top of its own but the desktop app's, and no eased height.
-    expect(text.match(/\btop: calc\(50%[^;]*;/g)).toEqual(["top: calc(50% + var(--titlebar-h) / 2);"]);
+    expect(text.match(/\btop: var\(--titlebar-h\);/g)).toEqual(["top: var(--titlebar-h);"]);
+    expect(text).not.toMatch(/\btop: calc\(50%/);
     expect(text).not.toMatch(/transition: height/);
     expect(rule(text, ".cmp-steps-row")).toContain("height: var(--cmp-line)");
     // The page at 16:10 takes the most of its stage in the same frame, never a size of its own.
@@ -1873,7 +1874,7 @@ describe("the dialog's size (computer.css)", () => {
       "@media (min-width: 721px) {\n  html[data-desktop] .ac-dialog.cmp-dialog:not(.is-full) {",
     )[1];
     expect(app?.split("}")[0]).toContain("--cmp-bar: var(--titlebar-h)");
-    expect(app?.split("}")[0]).toContain("top: calc(50% + var(--titlebar-h) / 2)");
+    expect(app?.split("}")[0]).toContain("top: var(--titlebar-h)");
     const desktop = await Bun.file(new URL("../src/desktop.css", import.meta.url).pathname).text();
     expect(desktop).toContain("--titlebar-h: calc(48px / var(--app-zoom, 1))");
   });
