@@ -84,7 +84,14 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             }
         });
     }
-    builder.build(app)?;
+    // The icon is optional: without a StatusNotifier host the backend's spawn returns Err (ksni's `Watcher` or
+    // `WontShow`), and a setup that fails would abort the whole app. It is not retried: the crate registers the
+    // item only at spawn (a watcher that goes away later is survived by the crate; nothing re-registers a failed
+    // one), so the icon waits for the next start. Everything else reads the tray through `tray_by_id`, which
+    // is then None, and `shown()` keeps the window reachable.
+    if let Err(err) = builder.build(app) {
+        eprintln!("agentes.chat: no tray icon: {err}");
+    }
     Ok(())
 }
 
