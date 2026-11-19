@@ -591,7 +591,15 @@ fn migrate_login_item(app: &AppHandle) {
     let _ = app;
 }
 
+/// The app's identity where a system needs a name without a dot (ADR 0202, addendum of 2026-11-19): on Linux GTK
+/// sends it as the window's Wayland `app_id` and X11 class, so it names the desktop entry the compositor reads the
+/// window's icon from. The binary keeps its own name, which tells the desktop app from the runner and the sidecars.
+pub const APP_ID: &str = "agentes-chat";
+
 pub fn run() {
+    // Before GTK starts: GTK reads the program's name once, when it makes the first window.
+    #[cfg(target_os = "linux")]
+    webkit2gtk::glib::set_prgname(Some(APP_ID));
     // Before any thread starts: WebKitGTK reads how to draw once.
     graphics::choose();
     // Taken once: a later reopen for an update keeps a start at login in the background.

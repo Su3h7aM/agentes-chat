@@ -29,6 +29,9 @@ Give development a database of its own, never a production one. To run the produ
 instead, build it and start it with the compose file ([SELF_HOSTING.md](SELF_HOSTING.md), "From
 source"). The phone app builds on EAS ([apps/mobile/README.md](apps/mobile/README.md)) and the
 desktop app (macOS, Windows and Linux) in the Desktop workflow (`.github/workflows/desktop.yml`).
+The Linux AppImage builds on your machine with `docker` (or podman's): `bun run desktop:appimage` writes it to
+`apps/desktop/src-tauri/target/release/bundle/appimage/` ([ADR 0202](docs/adr/0202-linux-appimage-anylinux.md)); it
+shares your Cargo and Bun caches.
 
 ## Checks
 
