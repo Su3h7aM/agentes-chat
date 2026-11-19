@@ -3541,14 +3541,14 @@ function Parts({ resetKey, children }: { resetKey: unknown; children: ReactNode 
   });
 }
 
+/** The rows a conversation opening at its end draws first: more than a tall screen shows. */
+const FIRST_ROWS = 30;
+
 /**
  * Persisted rows, then the agents' live blocks at the end (their replies are posted there, after what people sent
  * meanwhile). One flat keyed list: an answer seen live is drawn under its block's key, so the final message takes a
  * drawn block's place without a remount. Memoized: a run's events don't re-render it.
  */
-/** The rows a conversation opening at its end draws first: more than a tall screen shows. */
-const FIRST_ROWS = 30;
-
 const Timeline = memo(function Timeline({
   items,
   ready,

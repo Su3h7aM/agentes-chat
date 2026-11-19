@@ -69,8 +69,21 @@ export function formatMoneyUsd(locale: string, n: number): string {
   }).format(n);
 }
 
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** A formatter kept per language and options: making one costs far more than using it, and a chat formats a time per row. */
+export function dateFormat(locale: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}|${JSON.stringify(opts)}`;
+  let format = dateFormats.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, opts);
+    dateFormats.set(key, format);
+  }
+  return format;
+}
+
 export const formatDate = (locale: string, d: Date | string | number, opts: Intl.DateTimeFormatOptions) =>
-  new Intl.DateTimeFormat(locale, opts).format(new Date(d));
+  dateFormat(locale, opts).format(new Date(d));
 
 /** "10:42", "10:42 AM", by the language's own clock. */
 export const formatTime = (locale: string, d: Date | string | number) =>
@@ -106,9 +119,7 @@ export function relativeTime(locale: string, d: Date | string | number, now: Dat
 
 /** Whether the language writes the day before the month ("24/10") or after it ("10/24", "10月24日"). */
 export function dayMonthOrder(locale: string): "dm" | "md" {
-  const parts = new Intl.DateTimeFormat(locale, { day: "numeric", month: "numeric" }).formatToParts(
-    new Date(2026, 9, 24),
-  );
+  const parts = dateFormat(locale, { day: "numeric", month: "numeric" }).formatToParts(new Date(2026, 9, 24));
   const day = parts.findIndex((p) => p.type === "day");
   const month = parts.findIndex((p) => p.type === "month");
   return day < month ? "dm" : "md";

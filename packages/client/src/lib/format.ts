@@ -81,7 +81,7 @@ export function uses12h(locale: string) {
   let found = twelveHour.get(locale);
   if (found === undefined) {
     try {
-      found = new Intl.DateTimeFormat(locale, { hour: "numeric" }).resolvedOptions().hour12 === true;
+      found = dateFormat(locale, { hour: "numeric" }).resolvedOptions().hour12 === true;
     } catch {
       found = false;
     }
