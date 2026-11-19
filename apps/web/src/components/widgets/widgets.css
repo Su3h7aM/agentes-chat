@@ -10,8 +10,11 @@
     right: 12px;
     bottom: 12px;
     left: auto;
+    margin: 0;
     transform: none;
     width: min(480px, calc(100% - 24px));
+    /* Stretched between its top and bottom, not the kit's content height. */
+    height: auto;
     max-height: none;
   }
   .ac-dialog__scrim:has(+ .ac-dialog.wd) {

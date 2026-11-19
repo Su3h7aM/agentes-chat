@@ -2995,9 +2995,11 @@ html:not([data-pointer]) .ac-tab:focus-visible {
 .ac-dialog {
   position: fixed;
   z-index: var(--z-dialog);
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  /* Centered by layout, not a transform: a half-pixel translate makes WebKitGTK sample the layer
+     with linear filtering and blur the text (https://bugs.webkit.org/show_bug.cgi?id=299602). */
+  inset: 0;
+  margin: auto;
+  height: fit-content;
   width: min(var(--ac-dialog-width, 600px), calc(100% - 32px));
   /* Fixed head and foot; the body scrolls (viewport minus margins). */
   max-height: calc(100vh - 48px);
@@ -3813,9 +3815,10 @@ html:not([data-pointer]) .ac-back:focus-visible {
 .ac-details {
   position: fixed;
   z-index: var(--z-dialog);
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  /* Centered by layout, as in `.ac-dialog`. */
+  inset: 0;
+  margin: auto;
+  height: fit-content;
   width: min(720px, calc(100% - 48px));
   max-height: calc(100vh - 48px);
   /* biome-ignore lint/suspicious/noDuplicateProperties: dvh with a vh fallback for older browsers */
@@ -5365,7 +5368,7 @@ html:not([data-pointer]) .ac-switch:focus-visible {
 @keyframes ac-dialog-out {
   to {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.98);
+    transform: scale(0.98);
   }
 }
 @keyframes ac-chip-in {
@@ -5388,11 +5391,11 @@ html:not([data-pointer]) .ac-switch:focus-visible {
 @keyframes ac-dialog-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.97);
+    transform: scale(0.97);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: none;
   }
 }
 @keyframes ac-pop-down {
@@ -8837,9 +8840,10 @@ html:not([data-pointer]) .ac-msg:focus-within .ac-react--add,
   --palette-pad: 6px;
   position: fixed;
   z-index: var(--z-dialog);
-  left: 50%;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
   top: 14vh;
-  transform: translateX(-50%);
   width: min(620px, calc(100% - 32px));
   border-radius: var(--radius-section);
   overflow: hidden;
@@ -10847,6 +10851,7 @@ html:not([data-pointer]) .ac-filter__option:focus-visible {
     right: 0;
     bottom: 0;
     left: 0;
+    margin: 0;
     transform: none;
     width: 100%;
     max-height: calc(100vh - 12px);
@@ -10866,6 +10871,7 @@ html:not([data-pointer]) .ac-filter__option:focus-visible {
   .ac-details--lg,
   .ac-details--xl {
     inset: 0;
+    margin: 0;
     transform: none;
     width: 100%;
     max-height: none;

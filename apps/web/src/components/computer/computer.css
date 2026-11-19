@@ -108,7 +108,7 @@
 @media (min-width: 721px) {
   html[data-desktop] .ac-dialog.cmp-dialog:not(.is-full) {
     --cmp-bar: var(--titlebar-h);
-    top: calc(50% + var(--titlebar-h) / 2);
+    top: var(--titlebar-h);
   }
 }
 .cmp-steps-row {
@@ -619,6 +619,7 @@
   .ac-dialog.cmp-dialog {
     top: 0;
     left: 0;
+    margin: 0;
     transform: none;
     width: 100%;
     height: 100dvh;
