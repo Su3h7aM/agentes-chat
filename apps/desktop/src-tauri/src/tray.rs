@@ -252,11 +252,14 @@ pub fn set_state(app: &AppHandle, state: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Linux: whether the tray icon shows somewhere. Tauri's tray is an AppIndicator, drawn only by a
+/// Linux: whether the app's tray icon shows somewhere. The icon is drawn only by a
 /// StatusNotifier host (KDE's panel, GNOME's AppIndicator extension, Waybar's tray), which registers with the
 /// watcher on the session bus. Without one the icon is nowhere, and a hidden window could not be opened again.
 #[cfg(target_os = "linux")]
-pub fn shown() -> bool {
+pub fn shown(app: &AppHandle) -> bool {
+    if app.tray_by_id(TRAY_ID).is_none() {
+        return false;
+    }
     use webkit2gtk::gio;
     use webkit2gtk::glib::Variant;
     let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>) else { return false };

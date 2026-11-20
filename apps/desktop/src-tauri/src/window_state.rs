@@ -78,13 +78,20 @@ pub fn remember(window: &tauri::Window, throttle: bool) {
     }
     let maximized = window.is_maximized().unwrap_or(false);
     let scale = window.scale_factor().unwrap_or(1.0);
-    let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else { return };
+    let Ok(size) = window.inner_size() else { return };
+    let position = if !maximized && !crate::graphics::native_wayland() {
+        window.outer_position().ok()
+    } else {
+        None
+    };
     let save = move |app: &AppHandle| {
         update(app, |saved| {
             saved.maximized = maximized;
             if !maximized {
-                saved.x = Some(f64::from(position.x) / scale);
-                saved.y = Some(f64::from(position.y) / scale);
+                if let Some(position) = position {
+                    saved.x = Some(f64::from(position.x) / scale);
+                    saved.y = Some(f64::from(position.y) / scale);
+                }
                 saved.width = Some(f64::from(size.width) / scale);
                 saved.height = Some(f64::from(size.height) / scale);
             }

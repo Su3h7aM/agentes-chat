@@ -52,6 +52,7 @@ libc = "0.2"
 rust-ini = "=0.21.1"
 # The site's web view itself (main_window.rs, graphics.rs): the copy Tauri already builds with, at its features.
 webkit2gtk = { version = "2", features = ["v2_40"] }
+gdk = "0.18"
 # Tauri's tray on its StatusNotifierItem backend (tray.rs): AppIndicator, the default, never passes a click to the
 # app. With both on, tray-icon picks ksni (and says so in a build warning). Same version as Tauri's own.
 tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }

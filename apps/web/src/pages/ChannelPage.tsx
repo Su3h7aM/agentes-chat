@@ -1377,7 +1377,9 @@ function ChannelView({
   // pages come as the person scrolls down, until they reach it.
   const [gap, setGap] = useState(false);
   const [newerLoading, setNewerLoading] = useState(false);
+  const manualAnchor = desktopPlatform() === "linux" || !anchorsScroll();
   const anchor = useRef<{ row: Element; top: number } | null>(null);
+  const restoredAnchor = useRef<{ row: Element; contentTop: number } | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
     if (thread || olderState !== "idle" || !messages.data) return;
@@ -1460,9 +1462,12 @@ function ChannelView({
     // Native scroll anchoring already moved a list that isn't at its very top.
     if (anchorsScroll() && el.scrollTop > 0) return;
     // By what came above, not back to where the list was: the person may have scrolled on since the page was asked for.
-    const shift = a.row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+    const top = a.row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    const shift = top - a.top;
+    const contentTop = top + el.scrollTop;
     if (shift !== 0) el.scrollTop += shift;
-  }, [older]);
+    if (manualAnchor) restoredAnchor.current = { row: a.row, contentTop };
+  }, [older, manualAnchor]);
   // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
   // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
   // reading them they stay, where releasing would move the conversation under them. Never under a page still
@@ -1859,25 +1864,33 @@ function ChannelView({
         ownGlide = autoScrollUntil.current;
       } else followRef.current();
     };
-    // Reading further up in a browser with no scroll anchoring: rows drawn late above the top edge would push what
-    // is on screen down, so the list moves by as much (`anchorShift`). Pinned to the end, `pin` already follows.
-    const heights = anchorsScroll() ? null : new WeakMap<Element, number>();
+    const heights = manualAnchor ? new WeakMap<Element, number>() : null;
     const hold = (entries: ResizeObserverEntry[]) => {
       if (!heights) return;
+      const saved = restoredAnchor.current;
+      restoredAnchor.current = null;
+      const restored = saved && el.contains(saved.row) ? saved : null;
+      const reading = !stick.current && Date.now() >= autoScrollUntil.current;
       const resized: RowResize[] = [];
-      const listTop = el.getBoundingClientRect().top - el.scrollTop;
+      const scrollTop = el.scrollTop;
+      let listTop: number | undefined;
       for (const { target } of entries) {
-        if (!(target instanceof HTMLElement) || target === el) continue;
+        if (!(target instanceof HTMLElement) || target.parentElement !== el) continue;
         const before = heights.get(target);
         const after = target.offsetHeight;
         heights.set(target, after);
         // Laid out whole once: it may be skipped now, at the height it remembers (layout.css).
         if (before === undefined) target.dataset.sized = "";
-        if (before !== undefined && before !== after)
+        if (reading && !restored && before !== undefined && before !== after) {
+          listTop ??= el.getBoundingClientRect().top - scrollTop;
           resized.push({ top: target.getBoundingClientRect().top - listTop, before, after });
+        }
       }
-      if (stick.current || Date.now() < autoScrollUntil.current) return;
-      const shift = anchorShift(resized, el.scrollTop);
+      if (!reading) return;
+      // The page restoration already covered resizes delivered in this batch. Only move for changes since then.
+      const shift = restored
+        ? restored.row.getBoundingClientRect().top - el.getBoundingClientRect().top + scrollTop - restored.contentTop
+        : anchorShift(resized, scrollTop);
       if (shift !== 0) el.scrollTop += shift;
     };
     // What stands above the list folding away (the day's greeting, a bar) moves its top edge up: read further up, the
@@ -1903,15 +1916,19 @@ function ChannelView({
       typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver((records) => {
-            for (const r of records) for (const n of Array.from(r.addedNodes)) if (n instanceof Element) ro.observe(n);
+            for (const record of records) {
+              for (const node of record.removedNodes) if (node instanceof Element) ro.unobserve(node);
+              for (const node of record.addedNodes) if (node instanceof Element) ro.observe(node);
+            }
           });
     mo?.observe(el, { childList: true });
     return () => {
+      restoredAnchor.current = null;
       clearTimeout(later);
       ro.disconnect();
       mo?.disconnect();
     };
-  }, [isMember]);
+  }, [isMember, manualAnchor]);
   const lastKey = timeline.at(-1)?.key;
   const previousLastKey = useRef(lastKey);
   /** The person asked for the end (the round button, "Fim da resposta", a correction sent). */
@@ -2910,6 +2927,7 @@ function ChannelView({
                           <section
                             ref={scroller}
                             className="channel__messages"
+                            data-manual-anchor={manualAnchor ? "" : undefined}
                             data-look={look.style}
                             data-faces={look.faces ? undefined : "false"}
                             data-wallpaper={wallpaper?.wallpaper.kind}

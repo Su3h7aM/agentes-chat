@@ -5,7 +5,7 @@
     "createUpdaterArtifacts": false,
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"],
+        "depends": ["libwebkit2gtk-4.1-0 (>= 2.42)", "libayatana-appindicator3-1"],
         "recommends": ["fonts-noto-cjk"]
       }
     }

@@ -146,13 +146,38 @@ pub fn setup(app: &AppHandle) {
     if let Ok(Some(urls)) = app.deep_link().get_current() {
         receive(app, urls);
     }
+    #[cfg(any(target_os = "linux", windows))]
+    if let Some(url) = extra_args_link(&std::env::args().collect::<Vec<_>>()) {
+        receive(app, vec![url]);
+    }
     #[cfg(target_os = "linux")]
-    let _ = app.deep_link().register_all();
+    if let Err(err) = app.deep_link().register_all() {
+        eprintln!("agentes.chat: could not register the deep link scheme: {err}");
+    }
 }
 
-/// A second launch carrying a link (Windows, Linux): the link is handled, the main window stays as it is.
-pub fn in_args(args: &[String]) -> bool {
-    args.iter().any(|a| a.starts_with("agenteschat:"))
+/// The plugin handles the usual single-URL launch itself. Handle only its unsupported extra-argument case.
+#[cfg(any(target_os = "linux", windows))]
+fn extra_args_link(args: &[String]) -> Option<Url> {
+    if args.len() <= 2 {
+        return None;
+    }
+    args[1..].iter().filter_map(|arg| Url::parse(arg).ok()).find(accept)
+}
+
+/// A single URL has already been delivered by the plugin before the single-instance callback.
+#[cfg(any(target_os = "linux", windows))]
+pub fn handle_second_launch(app: &AppHandle, args: &[String]) -> bool {
+    if let Some(url) = extra_args_link(args) {
+        receive(app, vec![url]);
+        return true;
+    }
+    single_url_arg(args)
+}
+
+#[cfg(any(target_os = "linux", windows, test))]
+fn single_url_arg(args: &[String]) -> bool {
+    args.len() == 2 && Url::parse(&args[1]).is_ok_and(|url| accept(&url))
 }
 
 #[tauri::command]
@@ -244,8 +269,16 @@ mod tests {
         assert!(!accept(&"https://app.agentes.chat/connect".parse().unwrap()));
         let long: Url = format!("agenteschat://connect?server=x&pad={}", "a".repeat(MAX_LINK)).parse().unwrap();
         assert!(!accept(&long));
-        assert!(in_args(&["/usr/bin/agentes".into(), "agenteschat://connect?server=x".into()]));
-        assert!(!in_args(&["/usr/bin/agentes".into(), "--autostart".into()]));
+        assert!(single_url_arg(&["/usr/bin/agentes".into(), "agenteschat://connect?server=x".into()]));
+        assert!(!single_url_arg(&["/usr/bin/agentes".into(), "--autostart".into()]));
+        #[cfg(any(target_os = "linux", windows))]
+        {
+            let args = ["app".into(), "--other".into(), "agenteschat://connect?server=x".into()];
+            assert!(!single_url_arg(&args));
+            assert_eq!(extra_args_link(&args).unwrap().scheme(), SCHEME);
+            assert!(extra_args_link(&["app".into(), "agenteschat://connect".into()]).is_none());
+            assert!(extra_args_link(&["app".into(), "--other".into(), "agenteschat://[".into()]).is_none());
+        }
     }
 
     #[test]

@@ -202,7 +202,9 @@ export function contextMenuHandler(build: (e: MouseEvent) => MenuEntry[]) {
 /** Copies `text` and says so (the toast's words come from the caller). */
 export async function copyText(text: string, done: () => void) {
   try {
-    await navigator.clipboard?.writeText(text);
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) return;
+    await clipboard.writeText(text);
     done();
   } catch {
     // Clipboard refused: nothing copied, nothing said.

@@ -1238,6 +1238,10 @@ html:not([data-pointer]) .sidebar__user:focus-visible {
     scrollbar-gutter: stable;
   }
 }
+/* WebKitGTK's anchoring drifts when skipped message rows change height. */
+.channel__messages[data-manual-anchor] {
+  overflow-anchor: none;
+}
 /* A message that @mentions the viewer: a tinted row, its corners all round. No accent bar on its left edge: the tint
    and the name in the words say it. No other row carries a plate at rest (only a hover on someone else's row, an open
    menu or a linked message, and those pass). */

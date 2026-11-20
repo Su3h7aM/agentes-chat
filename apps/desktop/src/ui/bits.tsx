@@ -34,7 +34,7 @@ export function CommandCopy({ command, inline = false }: { command: string; inli
   }, [copied]);
   const copy = () =>
     void navigator.clipboard
-      .writeText(command)
+      ?.writeText(command)
       .then(() => setCopied(true))
       .catch(() => {});
   if (inline) {

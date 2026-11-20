@@ -2093,9 +2093,8 @@ fn install(app: &AppHandle, choice: &Choice) -> Result<(), String> {
     let _ = fs::remove_file(folder.pending());
     let here = state(app).here.clone();
     save_here(app, &here);
-    {
-        use tauri_plugin_autostart::ManagerExt;
-        let _ = app.autolaunch().enable();
+    if let Err(err) = crate::autostart::enable(app) {
+        eprintln!("agentes.chat: could not enable autostart: {err}");
     }
     emit_status(app);
     // The main window opens signed in, or else on the server's sign-in page, whose "Continue on this Mac" signs the

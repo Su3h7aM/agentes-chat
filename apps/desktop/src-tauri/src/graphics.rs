@@ -388,6 +388,32 @@ fn webkit_version() -> (u32, u32, u32) {
     }
 }
 
+// Capture GDK on the GTK thread, then read only this value from commands and window callbacks.
+#[cfg(target_os = "linux")]
+static GDK_BACKEND: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "linux")]
+pub fn capture_backend() {
+    use webkit2gtk::glib::object::ObjectExt;
+    let backend = gdk::Display::default().map_or("unknown", |display| match display.type_().name() {
+        "GdkWaylandDisplay" => "wayland",
+        "GdkX11Display" => "x11",
+        _ => "unknown",
+    });
+    let _ = GDK_BACKEND.set(backend);
+}
+
+pub fn native_wayland() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        GDK_BACKEND.get() == Some(&"wayland")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// What a Linux computer says about how it draws.
 #[derive(Serialize)]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -395,6 +421,7 @@ pub struct System {
     pub distro: String,
     /// "wayland (GNOME)", "x11 (KDE)".
     pub session: String,
+    pub gdk_backend: &'static str,
     pub webkit: String,
     /// Each graphics card by maker, with its kernel driver: "Intel (i915)", "AMD (amdgpu) + NVIDIA (nvidia)".
     pub gpu: String,
@@ -406,13 +433,15 @@ pub struct System {
 }
 
 impl System {
-    /// "Ubuntu 26.04 LTS · wayland (GNOME) · WebKitGTK 2.50.4 · Intel (i915) · CPU (chosen) · AppImage".
+    /// "Ubuntu 26.04 LTS · wayland (GNOME) · GDK x11 · WebKitGTK 2.50.4 · Intel (i915) · CPU (chosen) · AppImage".
     pub fn line(&self) -> String {
+        let gdk = format!("GDK {}", self.gdk_backend);
         let webkit = format!("WebKitGTK {}", self.webkit);
         let renderer = format!("{} ({})", self.renderer.to_uppercase(), self.renderer_why);
         [
             self.distro.as_str(),
             self.session.as_str(),
+            gdk.as_str(),
             webkit.as_str(),
             self.gpu.as_str(),
             renderer.as_str(),
@@ -432,6 +461,7 @@ pub fn system() -> Option<System> {
     Some(System {
         distro: std::fs::read_to_string("/etc/os-release").map(|t| distro_of(&t)).unwrap_or_default(),
         session: session_of(&var("XDG_SESSION_TYPE"), &var("XDG_CURRENT_DESKTOP")),
+        gdk_backend: GDK_BACKEND.get().copied().unwrap_or("unknown"),
         webkit: format!("{major}.{minor}.{micro}"),
         gpu: gpus(),
         renderer: renderer(),
@@ -537,6 +567,7 @@ mod tests {
         let system = System {
             distro: distro_of(os_release),
             session: session_of("wayland", "GNOME"),
+            gdk_backend: "x11",
             webkit: "2.50.4".into(),
             gpu: gpu_of("0x8086\n", "i915"),
             renderer: "cpu",
@@ -545,7 +576,7 @@ mod tests {
         };
         assert_eq!(
             system.line(),
-            "Ubuntu 26.04 LTS · wayland (GNOME) · WebKitGTK 2.50.4 · Intel (i915) · CPU (chosen) · AppImage"
+            "Ubuntu 26.04 LTS · wayland (GNOME) · GDK x11 · WebKitGTK 2.50.4 · Intel (i915) · CPU (chosen) · AppImage"
         );
         assert_eq!(distro_of("ID=arch\n"), "");
         assert_eq!(session_of("", "Hyprland"), "Hyprland");
@@ -553,10 +584,10 @@ mod tests {
         assert_eq!(gpu_of("0x1af4", ""), "0x1af4");
         assert_eq!(gpu_of("", "virtio-pci"), "virtio-pci");
         let blank = System { distro: String::new(), gpu: String::new(), ..system };
-        assert_eq!(blank.line(), "wayland (GNOME) · WebKitGTK 2.50.4 · CPU (chosen) · AppImage");
+        assert_eq!(blank.line(), "wayland (GNOME) · GDK x11 · WebKitGTK 2.50.4 · CPU (chosen) · AppImage");
         assert_eq!(
             details_line("0.8.9", "linux", None, Some(&blank)),
-            "agentes.chat 0.8.9 · Linux · wayland (GNOME) · WebKitGTK 2.50.4 · CPU (chosen) · AppImage"
+            "agentes.chat 0.8.9 · Linux · wayland (GNOME) · GDK x11 · WebKitGTK 2.50.4 · CPU (chosen) · AppImage"
         );
         assert_eq!(details_line("0.8.9", "macos", Some("15.1"), None), "agentes.chat 0.8.9 · macOS 15.1");
         assert_eq!(details_line("0.8.9", "windows", None, None), "agentes.chat 0.8.9 · Windows");

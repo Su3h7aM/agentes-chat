@@ -323,8 +323,8 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
             }
             _ => true,
         });
-    let builder = match (saved.x, saved.y) {
-        (Some(x), Some(y)) => builder.position(x, y),
+    let builder = match (saved.x, saved.y, crate::graphics::native_wayland()) {
+        (Some(x), Some(y), false) => builder.position(x, y),
         _ => builder.center(),
     };
     #[cfg(target_os = "windows")]

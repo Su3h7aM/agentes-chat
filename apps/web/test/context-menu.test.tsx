@@ -5,7 +5,7 @@ setupDom();
 
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { messageLink } from "@/components/MessageMore";
-import { type MenuEntry, setMenuLook, tidy, toSystem } from "@/lib/context-menu";
+import { copyText, type MenuEntry, setMenuLook, tidy, toSystem } from "@/lib/context-menu";
 import { createFakeApi, ENG_ID, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
@@ -58,6 +58,37 @@ const messageOf = (text: string) => {
   if (!el) throw new Error(`no message with ${text}`);
   return el;
 };
+
+test("copy reports success only after the clipboard accepts the text", async () => {
+  const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  let successes = 0;
+  try {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    await copyText("hello", () => successes++);
+    expect(successes).toBe(0);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error("denied");
+        },
+      },
+    });
+    await copyText("hello", () => successes++);
+    expect(successes).toBe(0);
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => void written.push(text) },
+    });
+    await copyText("hello", () => successes++);
+    expect(written).toEqual(["hello"]);
+    expect(successes).toBe(1);
+  } finally {
+    if (original) Object.defineProperty(navigator, "clipboard", original);
+    else delete (navigator as { clipboard?: unknown }).clipboard;
+  }
+});
 
 describe("one list, two looks", () => {
   const run = () => {};

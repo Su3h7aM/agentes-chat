@@ -54,6 +54,10 @@ Tauri on 22.04 (`tauri build --bundles deb`), because a deb must link the librar
 AppImage comes only from the image: there is one AppImage build. The release names are unchanged
 (`apps/server/src/routes/desktop.ts` reads them).
 
+The deb requires `libwebkit2gtk-4.1-0 (>= 2.42)`: Wry links cookie manager functions introduced in 2.42. The 0.8.13
+deb installed with 2.40.5 but could not start; it started and loaded the chat with 2.42.5 and 2.50.4. Tauri also adds an
+unversioned WebKitGTK dependency; both requirements must be satisfied. The AppImage carries its own WebKitGTK.
+
 ### 4. Where the app's files sit, and the updater
 
 Under sharun the executable is `AppDir/bin/<name>`, and Tauri's resource folder is `<executable's folder>/../lib/<product

@@ -8,6 +8,7 @@
 //! web view.
 
 mod app_icon;
+mod autostart;
 mod bench;
 mod cookies;
 mod cover;
@@ -557,9 +558,11 @@ async fn autostart_get(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 async fn autostart_set(app: AppHandle, on: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let launcher = app.autolaunch();
-        let result = if on { launcher.enable() } else { launcher.disable() };
-        result.map_err(|e| e.to_string())
+        if on {
+            autostart::enable(&app)
+        } else {
+            app.autolaunch().disable().map_err(|err| err.to_string())
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -728,16 +731,18 @@ pub fn run() {
     let builder = tauri::Builder::default()
         // First: a second launch brings the running app's window back; one carrying a link (Windows,
         // Linux) goes to the deep-link plugin first (`deep_link.rs` shows it).
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // `--compatibility-mode` over a running app: it reopens, drawing as the switch now says (graphics.rs).
             #[cfg(target_os = "linux")]
-            if argv.iter().any(|a| a == graphics::COMPAT_ARG) {
+            if _argv.iter().any(|arg| arg == graphics::COMPAT_ARG) {
                 reopen(app.clone());
                 return;
             }
-            if !deep_link::in_args(&argv) {
-                open_app(app);
+            #[cfg(any(target_os = "linux", windows))]
+            if deep_link::handle_second_launch(app, &_argv) {
+                return;
             }
+            open_app(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
@@ -858,6 +863,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             health::start(&handle);
+            #[cfg(target_os = "linux")]
+            graphics::capture_backend();
             // Before the tray (it lists them).
             servers::load(&handle);
             tray::create(&handle)?;
@@ -869,7 +876,9 @@ pub fn run() {
             // Start at login written before the flag existed: write it again, now with the flag.
             let launcher = handle.autolaunch();
             if launcher.is_enabled().unwrap_or(false) {
-                let _ = launcher.enable();
+                if let Err(err) = autostart::enable(&handle) {
+                    eprintln!("agentes.chat: could not update autostart: {err}");
+                }
             }
             // The server here first (its own homes start with the rest); nothing starts without homes (no
             // workspace lets its agents work on this computer yet).
@@ -886,9 +895,12 @@ pub fn run() {
             // window over it.
             let at_login = started_at_login(std::env::args(), reopened);
             let resume = prepare::resume(&handle, at_login);
+            let background = at_login;
+            #[cfg(target_os = "linux")]
+            let background = background && tray::shown(&handle);
             if servers::current(&handle).is_none() {
                 let _ = present(&handle, "welcome");
-            } else if !at_login {
+            } else if !background {
                 vitals::window_at_launch();
                 let page = bench::url().or_else(|| resume.as_ref().and_then(|r| r.page.clone()));
                 let _ = main_window::open(&handle, page);
@@ -999,7 +1011,7 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
                         begin_quit(window.app_handle().clone());
                         return;
                     }
-                    if !tray::shown() {
+                    if !tray::shown(window.app_handle()) {
                         let _ = window.minimize();
                         return;
                     }
