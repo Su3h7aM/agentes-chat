@@ -13,6 +13,38 @@ export interface RowResize {
   after: number;
 }
 
+export interface VisibleAnchor {
+  row: Element;
+  top: number;
+}
+
+export interface RestoredAnchor {
+  row: Element;
+  contentTop: number;
+}
+
+export function visibleAnchor(list: HTMLElement): VisibleAnchor | null {
+  const box = list.getBoundingClientRect();
+  let first: VisibleAnchor | null = null;
+  for (const row of list.children) {
+    if (row.classList.contains("channel__spacer")) continue;
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom <= box.top || rect.top >= box.bottom) continue;
+    const anchor = { row, top: rect.top - box.top };
+    if (row.classList.contains("ac-msg")) return anchor;
+    first ??= anchor;
+  }
+  return first;
+}
+
+export function restoreAnchorPosition(list: HTMLElement, anchor: VisibleAnchor): RestoredAnchor | null {
+  if (!list.contains(anchor.row)) return null;
+  const top = anchor.row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+  const scrollTop = list.scrollTop;
+  if (top !== anchor.top) list.scrollTop = scrollTop + top - anchor.top;
+  return { row: anchor.row, contentTop: top + scrollTop };
+}
+
 /**
  * How far to scroll so what is on screen stays where it was: the growth of every row that ended above the list's
  * top edge before it changed. A row crossing that edge, or below it, is what the person looks at: it grows in place.

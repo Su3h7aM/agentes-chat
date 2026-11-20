@@ -237,11 +237,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   Children,
+  Component,
+  cloneElement,
   createContext,
   Fragment,
   memo,
   type ReactElement,
   type ReactNode,
+  type RefObject,
   startTransition,
   useCallback,
   useContext,
@@ -254,7 +257,15 @@ import {
 } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
-import { anchorShift, anchorsScroll, type RowResize, topInList } from "@/chat/anchor";
+import {
+  anchorShift,
+  anchorsScroll,
+  type RestoredAnchor,
+  type RowResize,
+  restoreAnchorPosition,
+  type VisibleAnchor,
+  visibleAnchor,
+} from "@/chat/anchor";
 import { tokenizeBody } from "@/chat/body";
 import { ChatMedia } from "@/chat/ChatMedia";
 import { ChatVoice } from "@/chat/ChatVoice";
@@ -431,7 +442,7 @@ import { useWikiLinkRenderer } from "@/components/WikiLinks";
 import { BarAlsoTyping, BarPhrase, BarStep, ConsultClock, TypingMark, WorkingStack } from "@/components/WorkingLine";
 import { useChannelSearch } from "@/hooks/useChannelSearch";
 import { type DraftStore, useComposerDraft, useDraftText } from "@/hooks/useComposerDraft";
-import { useDirectory } from "@/hooks/useDirectory";
+import { type Directory, useDirectory } from "@/hooks/useDirectory";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useDmSidebar, useMembersColumn } from "@/hooks/useMembersColumn";
 import { useMentionSearch } from "@/hooks/useMentionSearch";
@@ -1378,8 +1389,8 @@ function ChannelView({
   const [gap, setGap] = useState(false);
   const [newerLoading, setNewerLoading] = useState(false);
   const manualAnchor = desktopPlatform() === "linux" || !anchorsScroll();
-  const anchor = useRef<{ row: Element; top: number } | null>(null);
-  const restoredAnchor = useRef<{ row: Element; contentTop: number } | null>(null);
+  const anchor = useRef<VisibleAnchor | null>(null);
+  const restoredAnchor = useRef<RestoredAnchor | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
     if (thread || olderState !== "idle" || !messages.data) return;
@@ -1394,22 +1405,7 @@ function ChannelView({
       .then((page) => {
         // Capture the visible row at response time, after any scrolling while the request was pending.
         const el = scroller.current;
-        if (el) {
-          const box = el.getBoundingClientRect();
-          let row: Element | undefined;
-          for (const child of el.children) {
-            if (child.classList.contains("channel__spacer")) continue;
-            const rect = child.getBoundingClientRect();
-            if (rect.bottom <= box.top || rect.top >= box.bottom) continue;
-            row ??= child;
-            // A day divider can move above the new rows; prefer a message that stays in place among them.
-            if (child.classList.contains("ac-msg")) {
-              row = child;
-              break;
-            }
-          }
-          anchor.current = row ? { row, top: row.getBoundingClientRect().top - box.top } : null;
-        }
+        if (el) anchor.current = visibleAnchor(el);
         // Drawn in slices: fifty rows in one task would hold the page still while the person scrolls on.
         startTransition(() => {
           setOlder((prev) => {
@@ -1458,15 +1454,11 @@ function ChannelView({
     const el = scroller.current;
     const a = anchor.current;
     anchor.current = null;
-    if (!el || !a || !el.contains(a.row)) return;
-    // Native scroll anchoring already moved a list that isn't at its very top.
-    if (anchorsScroll() && el.scrollTop > 0) return;
-    // By what came above, not back to where the list was: the person may have scrolled on since the page was asked for.
-    const top = a.row.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    const shift = top - a.top;
-    const contentTop = top + el.scrollTop;
-    if (shift !== 0) el.scrollTop += shift;
-    if (manualAnchor) restoredAnchor.current = { row: a.row, contentTop };
+    if (!el || !a) return;
+    // Native anchoring covers browsers where it is trusted; Linux keeps the manual path.
+    if (!manualAnchor && anchorsScroll() && el.scrollTop > 0) return;
+    const restored = restoreAnchorPosition(el, a);
+    if (manualAnchor) restoredAnchor.current = restored;
   }, [older, manualAnchor]);
   // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
   // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
@@ -3082,6 +3074,7 @@ function ChannelView({
                                   <ErrorBoundary resetKey={m} fallback={unshownLine}>
                                     <TimelineMessage
                                       message={m}
+                                      directory={dir}
                                       grouped={false}
                                       entering={false}
                                       modelLabels={NO_LABELS}
@@ -3093,6 +3086,7 @@ function ChannelView({
                               <>
                                 <Timeline
                                   items={repliesPending || introPending ? NO_ROWS : timeline}
+                                  directory={dir}
                                   // Held rows aren't its first load: counted then, they would all enter as new ones.
                                   ready={serverRead && !repliesPending && !introPending}
                                   slots={gap ? NO_SLOTS : slots}
@@ -3106,6 +3100,9 @@ function ChannelView({
                                   marks={contextMarkIds}
                                   progressive={opensAtEnd}
                                   openThreadId={panel?.id ?? null}
+                                  scroller={scroller}
+                                  stick={stick}
+                                  restoredAnchor={manualAnchor ? restoredAnchor : undefined}
                                 />
                                 {repliesPending && (
                                   <LoadingConversation count={Math.min((thread?.replyCount ?? 0) + 1, 6)} />
@@ -3508,6 +3505,7 @@ function ChannelView({
                       <ErrorBoundary resetKey={m} fallback={unshownLine}>
                         <TimelineMessage
                           message={m}
+                          directory={dir}
                           grouped={grouped}
                           entering={false}
                           modelLabels={NO_LABELS}
@@ -3579,16 +3577,41 @@ function Parts({ resetKey, children }: { resetKey: unknown; children: ReactNode 
   });
 }
 
-/** The rows a conversation opening at its end draws first: more than a tall screen shows. */
-const FIRST_ROWS = 30;
+class ProgressiveAnchor extends Component<{
+  whole: boolean;
+  scroller: RefObject<HTMLElement | null>;
+  stick: RefObject<boolean>;
+  restoredAnchor?: RefObject<RestoredAnchor | null>;
+  children: ReactNode;
+}> {
+  getSnapshotBeforeUpdate(previous: Readonly<this["props"]>): VisibleAnchor | null {
+    const { whole, scroller, stick, restoredAnchor } = this.props;
+    const el = scroller.current;
+    return restoredAnchor && !previous.whole && whole && el && !stick.current ? visibleAnchor(el) : null;
+  }
+
+  componentDidUpdate(_previous: Readonly<this["props"]>, _state: unknown, anchor: VisibleAnchor | null) {
+    const { scroller, restoredAnchor } = this.props;
+    const el = scroller.current;
+    if (el && anchor && restoredAnchor) restoredAnchor.current = restoreAnchorPosition(el, anchor);
+  }
+
+  render() {
+    return this.props.children;
+  }
+}
 
 /**
  * Persisted rows, then the agents' live blocks at the end (their replies are posted there, after what people sent
  * meanwhile). One flat keyed list: an answer seen live is drawn under its block's key, so the final message takes a
  * drawn block's place without a remount. Memoized: a run's events don't re-render it.
  */
+/** The rows a conversation opening at its end draws first: more than a tall screen shows. */
+const FIRST_ROWS = 30;
+
 const Timeline = memo(function Timeline({
   items,
+  directory,
   ready,
   slots,
   runKeys,
@@ -3601,8 +3624,12 @@ const Timeline = memo(function Timeline({
   marks,
   progressive = false,
   openThreadId = null,
+  scroller,
+  stick,
+  restoredAnchor,
 }: {
   items: ReturnType<typeof buildTimeline>;
+  directory: Directory;
   /** The first page loaded: rows from then on slide in. */
   ready: boolean;
   /** The agents' blocks at work (`chat/run-slots.ts`). */
@@ -3626,6 +3653,9 @@ const Timeline = memo(function Timeline({
   progressive?: boolean;
   /** The thread open in the panel beside the channel: only its line reads it (`OpenThreadContext`). */
   openThreadId?: string | null;
+  scroller: RefObject<HTMLElement | null>;
+  stick: RefObject<boolean>;
+  restoredAnchor?: RefObject<RestoredAnchor | null>;
 }) {
   const { t, i18n } = useTranslation();
   // A conversation opening at its end shows its last rows: they are drawn first and the rest in a transition, which
@@ -3758,6 +3788,7 @@ const Timeline = memo(function Timeline({
       <RunBlock
         key={slot.key}
         runId={slot.runId}
+        directory={directory}
         grouped={false}
         entering={blockEnters.current.get(slot.key) ?? false}
         modelLabels={modelLabels}
@@ -3809,6 +3840,7 @@ const Timeline = memo(function Timeline({
           key={blockKey}
           runId={m.agentRunId}
           message={m}
+          directory={directory}
           grouped={grouped}
           entering={false}
           modelLabels={modelLabels}
@@ -3823,6 +3855,7 @@ const Timeline = memo(function Timeline({
         <TimelineMessage
           key={item.key}
           message={m}
+          directory={directory}
           grouped={grouped}
           entering={entering}
           modelLabels={modelLabels}
@@ -3847,20 +3880,22 @@ const Timeline = memo(function Timeline({
   // so streaming never retries it, and its final message landing does.
   return (
     <OpenThreadContext.Provider value={openThreadId}>
-      <ConsultGroupsProvider value={consultGroups}>
-        <StopsProvider value={stops}>
-          {rows.map((row) => (
-            <ErrorBoundary
-              key={row.key}
-              resetKey={row.props.message}
-              onError={() => markUnshown(row.key)}
-              fallback={unshownLine}
-            >
-              {row}
-            </ErrorBoundary>
-          ))}
-        </StopsProvider>
-      </ConsultGroupsProvider>
+      <ProgressiveAnchor whole={whole} scroller={scroller} stick={stick} restoredAnchor={restoredAnchor}>
+        <ConsultGroupsProvider value={consultGroups}>
+          <StopsProvider value={stops}>
+            {rows.map((row) => (
+              <ErrorBoundary
+                key={row.key}
+                resetKey={row.props.message}
+                onError={() => markUnshown(row.key)}
+                fallback={unshownLine}
+              >
+                {row}
+              </ErrorBoundary>
+            ))}
+          </StopsProvider>
+        </ConsultGroupsProvider>
+      </ProgressiveAnchor>
     </OpenThreadContext.Provider>
   );
 });
@@ -3929,6 +3964,7 @@ function RunBlock({
 }: {
   runId: string;
   message?: MessageType;
+  directory: Directory;
   grouped: boolean;
   entering: boolean;
   modelLabels: Map<string, string>;
@@ -4623,6 +4659,41 @@ function WorkingTail({ onSeeAsk, ...here }: WorkHere & { onSeeAsk: (id: string) 
 
 const NO_TRAIL: TrailLine[] = [];
 
+/** Keep consultation updates inside the pair row instead of re-rendering the whole message. */
+function ReplyConsultPair({
+  message: m,
+  live,
+  lastOfRun,
+  relay,
+  row,
+}: {
+  message: MessageType;
+  live: boolean;
+  lastOfRun: boolean;
+  relay?: RelayedAnswer<MessageType>;
+  row: ReactElement<{ children: ReactElement<{ grouped?: boolean }> }>;
+}) {
+  const consulted = useMemo(() => consultationsOf(m.meta), [m.meta]);
+  const reached = useMemo(() => reachHandoffs(m.meta), [m.meta]);
+  const replyRun = isMediaAfterReply(m.meta) ? null : m.agentRunId;
+  const consults = useReplyConsults(
+    m.local ? null : live ? m.agentRunId : lastOfRun ? replyRun : null,
+    consulted,
+    !live,
+    reached,
+  );
+  const handedWorks = lastOfRun && !m.local ? (m.handedWorks ?? []) : [];
+  const paired = consults.filter(
+    (c) => !handedWorks.some((w) => w.handedBy?.consultationId === c.id) && c.id !== relay?.consultation.id,
+  );
+  const pair = m.author.id && paired.length > 0 ? <ConsultPairRow askerId={m.author.id} items={paired} /> : null;
+  return (
+    <>
+      {pair}
+      {pair ? cloneElement(row.props.children, { grouped: false }) : row.props.children}
+    </>
+  );
+}
 /**
  * One row; agent replies get feedback actions, people's messages get receipts. With `live`, the agent's
  * answer while it works (its steps, its words arriving, how to stop it): the same component, so the
@@ -4630,6 +4701,7 @@ const NO_TRAIL: TrailLine[] = [];
  */
 export const TimelineMessage = memo(function TimelineMessage({
   message: m,
+  directory: dir,
   grouped,
   entering,
   modelLabels,
@@ -4647,6 +4719,7 @@ export const TimelineMessage = memo(function TimelineMessage({
   relay,
 }: {
   message: MessageType;
+  directory: Directory;
   grouped: boolean;
   entering: boolean;
   modelLabels: Map<string, string>;
@@ -4690,7 +4763,6 @@ export const TimelineMessage = memo(function TimelineMessage({
   const queued = useWaiting(m.local === "failed" ? m.clientId : undefined);
   const local = m.local === "failed" && queued ? "pending" : m.local;
   const slowSend = useAfter(500, local === "pending");
-  const dir = useDirectory(org.id);
   const actions = useChannelActions();
   const pushAsk = useContext(PushAskContext);
   // Its own thread only: a reply landing in another thread doesn't draw this row again.
@@ -4849,27 +4921,9 @@ export const TimelineMessage = memo(function TimelineMessage({
   );
   // The root of a mission in the channel: its work lives in its thread.
   const missionStart = !m.threadId && Boolean(meta.missionStart) && actions?.openThread !== undefined;
-  // It asked other agents before answering: one row right before the reply, its run's questions (on the run's last
-  // message here; a run at work shows them on none until its reply comes, the working line says them) and the ones
-  // its `meta.consulted` names.
-  const consulted = useMemo(() => (m.author.type === "agent" ? consultationsOf(m.meta) : []), [m.author.type, m.meta]);
-  const reached = useMemo(() => reachHandoffs(m.meta), [m.meta]);
-  const consults = useReplyConsults(
-    m.author.type !== "agent" || m.local ? null : live ? m.agentRunId : lastOfRun ? replyRun : null,
-    consulted,
-    !live,
-    reached,
-  );
   // Work it handed over that reports here: its line under this reply says what the pair row would.
   const handedWorks = lastOfRun && !m.local ? (m.handedWorks ?? []) : [];
-  // The question whose answer it quotes at its top (`relay`) isn't in the pair row too.
-  const paired = consults.filter(
-    (c) => !handedWorks.some((w) => w.handedBy?.consultationId === c.id) && c.id !== relay?.consultation.id,
-  );
-  const pair =
-    m.author.type === "agent" && m.author.id && paired.length > 0 ? (
-      <ConsultPairRow askerId={m.author.id} items={paired} />
-    ) : null;
+
   // Another agent's message in an agent's DM (it helps that agent): its name on its first line, the DM names only one.
   const look = useContext(MessageLookContext);
   const helpingLook = useMemo(() => (helping && look ? { ...look, names: true } : null), [helping, look]);
@@ -4947,9 +5001,8 @@ export const TimelineMessage = memo(function TimelineMessage({
   ]
     .filter(Boolean)
     .join(" · ");
-  const row = (
+  const messageRow = (
     <>
-      {pair}
       <Message
         agent={m.author.type === "agent"}
         data-message-id={live ? undefined : m.id}
@@ -4966,7 +5019,7 @@ export const TimelineMessage = memo(function TimelineMessage({
                 ? m.id
                 : undefined
         }
-        grouped={grouped && !waiting && !pair}
+        grouped={grouped && !waiting}
         own={own}
         run={run}
         bare={waiting || !bodyShown}
@@ -5097,12 +5150,12 @@ export const TimelineMessage = memo(function TimelineMessage({
         aside={
           receipted || seenSlot ? (
             <>
-              {receipted && <MessageReceipts message={m} part="check" />}
-              {seenSlot && <SeenMark personId={seen ? dmPersonId : undefined} />}
+              {receipted && <MessageReceipts message={m} part="check" directory={dir} />}
+              {seenSlot && <SeenMark personId={seen ? dmPersonId : undefined} directory={dir} />}
             </>
           ) : undefined
         }
-        foot={receipted ? <MessageReceipts message={m} part="line" /> : undefined}
+        foot={receipted ? <MessageReceipts message={m} part="line" directory={dir} /> : undefined}
         menu={
           barred && menu.touch.length > 0
             ? { label: t("channel.actions", { name }), items: <MenuEntries entries={menu.touch} /> }
@@ -5330,7 +5383,9 @@ export const TimelineMessage = memo(function TimelineMessage({
             {missionCommand && <MissionCommandCard command={missionCommand} />}
             {missionSuggestion && <MissionSuggestionBar message={m} suggestion={missionSuggestion} />}
             {/* Everyone's reactions (👍/👎 on an agent's reply are its feedback, in the same pills). */}
-            {!m.local && !readOnly && <MessageReactions messageId={m.id} initial={m.reactions} feedback={feedback} />}
+            {!m.local && !readOnly && (
+              <MessageReactions messageId={m.id} directory={dir} initial={m.reactions} feedback={feedback} />
+            )}
             {/* Long work (ADR 0121): how it stands, under the agent's "Vou cuidar disso". */}
             {m.longWork && !m.local && (
               <MessageWorkLine
@@ -5376,6 +5431,12 @@ export const TimelineMessage = memo(function TimelineMessage({
       </Message>
     </>
   );
+  const row =
+    m.author.type === "agent" ? (
+      <ReplyConsultPair message={m} live={Boolean(live)} lastOfRun={lastOfRun} relay={relay} row={messageRow} />
+    ) : (
+      messageRow
+    );
   return helpingLook ? <MessageLookContext.Provider value={helpingLook}>{row}</MessageLookContext.Provider> : row;
 });
 

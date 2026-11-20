@@ -670,7 +670,8 @@ export function Composer({
   // A selection to restore after the text changes (formatting, an emoji).
   const selectAfter = useRef<[number, number] | null>(null);
 
-  useAutoGrow(ref, value);
+  const growsWithCss = typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
+  useAutoGrow(ref, value, !growsWithCss);
   const wide = useWideText(ref, value);
   // Once the text is in: the caret after an inserted mention, or a selection put back.
   useLayoutEffect(() => {

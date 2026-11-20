@@ -1,5 +1,4 @@
-import type { DmTarget } from "@agenteschat/client";
-import { addDm } from "@agenteschat/client";
+import { addDm, type DirectMessage, type DmTarget, keys, messagesQuery } from "@agenteschat/client";
 import { audienceNotice, canTalk, seesDetails } from "@agenteschat/client/lib/audience";
 import { greetingSuggestions } from "@agenteschat/client/lib/chat";
 import { isGone } from "@agenteschat/client/lib/errors";
@@ -41,6 +40,10 @@ export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMess
   const dm = useQuery({
     queryKey: ["org", org.id, "dm", kind, id],
     queryFn: async () => {
+      const known = qc
+        .getQueryData<DirectMessage[]>(keys.dms(org.id))
+        ?.find(({ with: partner }) => partner.type === kind && partner.id === id);
+      if (known) void qc.prefetchQuery(messagesQuery(api, org.id, known.channelId));
       const res = await api.dms.open(org.id, target);
       // A DM opened for the first time is in the DM list from its own answer: its search holds to it.
       if (res.dm) addDm(qc, org.id, res.dm);

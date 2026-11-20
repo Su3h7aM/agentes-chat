@@ -28,7 +28,7 @@ import { FanOutStrip } from "@/components/ComputerQueue";
 import { useConnectAi } from "@/components/connect-ai-context";
 import { HelpLink } from "@/components/HelpLink";
 import { ReportProblem, useProblemReports } from "@/components/ReportProblem";
-import { useDirectory } from "@/hooks/useDirectory";
+import type { Directory } from "@/hooks/useDirectory";
 import { STORAGE_KEYS, sessionStore } from "@/lib/storage";
 import { useToast } from "@/lib/toast";
 import { useLive } from "@/realtime/context";
@@ -135,10 +135,17 @@ function SteerMark({ steer, size }: { steer: SteerState; size?: 14 }) {
  * failure, no AI connected) or what nobody can (the AI provider is down, it retries by itself; the plan or budget has to renew): then the whole
  * receipt is a line under the message (`part="line"`), so the text still follows the name.
  */
-export function MessageReceipts({ message, part }: { message: Message; part: "check" | "line" }) {
+export function MessageReceipts({
+  message,
+  part,
+  directory: dir,
+}: {
+  message: Message;
+  part: "check" | "line";
+  directory: Directory;
+}) {
   const { t, i18n } = useTranslation();
   const { org, me } = useOrg();
-  const dir = useDirectory(org.id);
   const actions = useChannelActions();
   const api = useApi();
   const toast = useToast();
@@ -442,10 +449,8 @@ export function MessageReceipts({ message, part }: { message: Message; part: "ch
  * popover says who read it, and its slot is a live region that is there before it, so screen readers hear it as it
  * shows.
  */
-export function SeenMark({ personId }: { personId?: string }) {
+export function SeenMark({ personId, directory: dir }: { personId?: string; directory: Directory }) {
   const { t } = useTranslation();
-  const { org } = useOrg();
-  const dir = useDirectory(org.id);
   const name = personId ? (dir.memberById.get(personId)?.name ?? t("channel.unknownPerson")) : "";
   const words = t("receipts.seenBy", { names: name });
   const face = personId ? <ActorAvatar actor={{ type: "person", id: personId }} name={name} size="xs" /> : null;

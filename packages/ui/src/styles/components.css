@@ -7625,10 +7625,10 @@ html:not([data-pointer]) .ac-react:focus-visible {
 .ac-composer[data-wide] .ac-composer__text ~ .ac-composer__tools {
   margin-left: auto;
 }
-/* In the column the height comes from the text (Composer measures it); `flex: 1` from the row layout above would
-   pin it to its minimum. */
+/* In the column the field grows with its text. Composer measures it where field-sizing is unavailable. */
 .ac-composer textarea {
   flex: none;
+  field-sizing: content;
   font-size: var(--msg-text);
   line-height: var(--composer-line);
   min-height: var(--composer-row);

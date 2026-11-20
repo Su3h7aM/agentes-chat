@@ -1,4 +1,4 @@
-import { type RefObject, useLayoutEffect, useState } from "react";
+import { type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 /**
@@ -11,19 +11,26 @@ import { flushSync } from "react-dom";
  */
 export function useOverflows(box: RefObject<HTMLElement | null>, active = true, over?: number, under = over): boolean {
   const [cut, setCut] = useState(false);
+  // The last answer given, so a measure that finds the same one sets nothing and the hysteresis reads what was shown.
+  const answered = useRef<boolean | undefined>(undefined);
   useLayoutEffect(() => {
     const el = box.current;
     if (!el || !active) return;
-    const measure = () => {
-      const height = el.scrollHeight;
-      setCut((was) => height > ((was ? under : over) ?? el.clientHeight) + 1);
+    const measure = (beforePaint = false) => {
+      if (el.checkVisibility?.({ contentVisibilityAuto: true }) === false) return;
+      // Once cut, the box shows whole again only under `under`, not `over` (the hysteresis in the doc above).
+      const limit = (answered.current ? under : over) ?? el.clientHeight;
+      const next = el.scrollHeight > limit + 1;
+      if (next === answered.current) return;
+      answered.current = next;
+      if (beforePaint) flushSync(() => setCut(next));
+      else setCut(next);
     };
-    // A conversation's rows are skipped while off screen (`content-visibility: auto` in layout.css): measuring one
-    // lays it out anyway, about 10 ms each, a second for a conversation that opens with a hundred. A skipped one is
-    // measured by the observer once it comes on screen, before that frame is painted (hence at once, not later).
-    if (el.checkVisibility?.({ contentVisibilityAuto: true }) !== false) measure();
+    // A row off screen is skipped (`content-visibility: auto`) and measuring it lays it out anyway: its observer
+    // measures it once it is seen, before that frame paints (`flushSync`). Without `checkVisibility` it is at once.
+    measure();
     if (typeof ResizeObserver === "undefined") return;
-    const resized = new ResizeObserver(() => flushSync(measure));
+    const resized = new ResizeObserver(() => measure(true));
     // The box itself while it still grows towards its `max-height`, its first child for what it holds past it.
     resized.observe(el);
     if (el.firstElementChild) resized.observe(el.firstElementChild);

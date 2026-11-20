@@ -625,24 +625,31 @@ describe("boxes as tall as their text", () => {
 
   test("the composer grows the same way", () =>
     measured(async () => {
-      function Chat() {
-        const [value, setValue] = useState("");
-        return (
-          <Composer
-            value={value}
-            onChange={setValue}
-            onSend={() => {}}
-            label="Mensagem"
-            sendLabel="Enviar"
-            attachLabel="Anexar"
-          />
-        );
+      const css = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+      Object.defineProperty(globalThis, "CSS", { configurable: true, value: { supports: () => false } });
+      try {
+        function Chat() {
+          const [value, setValue] = useState("");
+          return (
+            <Composer
+              value={value}
+              onChange={setValue}
+              onSend={() => {}}
+              label="Mensagem"
+              sendLabel="Enviar"
+              attachLabel="Anexar"
+            />
+          );
+        }
+        render(<Chat />);
+        const box = body().getByRole("textbox", { name: "Mensagem" });
+        expect(box.style.height).toBe("44px");
+        await type(box, "um\ndois");
+        expect(box.style.height).toBe("66px");
+      } finally {
+        if (css) Object.defineProperty(globalThis, "CSS", css);
+        else Reflect.deleteProperty(globalThis, "CSS");
       }
-      render(<Chat />);
-      const box = body().getByRole("textbox", { name: "Mensagem" });
-      expect(box.style.height).toBe("44px");
-      await type(box, "um\ndois");
-      expect(box.style.height).toBe("66px");
     }));
 
   test("typing at the end never lets the box go to auto: the page around it isn't laid out twice per key", () =>

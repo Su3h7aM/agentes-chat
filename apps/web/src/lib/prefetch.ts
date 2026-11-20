@@ -63,13 +63,9 @@ export function prefetchChannel(qc: QueryClient, api: ApiClient, orgId: string, 
   prefetchConversation(qc, api, orgId, channelId);
 }
 
-/** The DM page's own query (`DmPage`): which conversation a DM with this agent or person is. */
-export const dmKey = (orgId: string, kind: "agent" | "person", id: string) => ["org", orgId, "dm", kind, id] as const;
-
 /**
- * A DM already in my list needs no `POST /dms` (which opens one) to know its conversation: the page's query gets it
- * from the list, and its messages are read now. A DM not in the list is opened by its page, as before; a hover never
- * opens one.
+ * A DM already in my list can have its messages read on the link's hover, but the page still confirms access with
+ * `POST /dms` before it shows the conversation. A DM not in the list is opened by its page; a hover never opens one.
  */
 export function prefetchDm(qc: QueryClient, api: ApiClient, orgId: string, kind: "agent" | "person", id: string) {
   const known = qc
@@ -79,8 +75,6 @@ export function prefetchDm(qc: QueryClient, api: ApiClient, orgId: string, kind:
     void qc.prefetchQuery(dmsQuery(api, orgId));
     return;
   }
-  const key = dmKey(orgId, kind, id);
-  if (qc.getQueryData(key) === undefined) qc.setQueryData(key, { channelId: known.channelId });
   prefetchConversation(qc, api, orgId, known.channelId);
 }
 

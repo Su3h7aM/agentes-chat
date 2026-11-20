@@ -9,6 +9,8 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { lookOf } from "@/lib/look";
 
+export type Directory = ReturnType<typeof useDirectory>;
+
 /**
  * People and agents of the organization, by id and handle, for names and avatars. `agents` is what lists and pickers
  * offer (`listed`); the lookups also resolve an agent unlisted to me, whose messages and public card still show.

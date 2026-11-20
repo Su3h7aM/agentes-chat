@@ -13,7 +13,7 @@ import {
 } from "@agenteschat/ui";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useDirectory } from "@/hooks/useDirectory";
+import type { Directory } from "@/hooks/useDirectory";
 import { AgentAvatar } from "./AgentAvatar";
 import { useCorrectionAsk } from "./CorrectionAsk";
 import { useOrg } from "./org-context";
@@ -106,17 +106,17 @@ export function ReactButton({ onPick }: { onPick: (emoji: string) => void }) {
  */
 export function MessageReactions({
   messageId,
+  directory: dir,
   initial,
   feedback,
 }: {
   messageId: string;
+  directory: Directory;
   initial?: ReactionCount[];
   /** An agent's reply: 👍/👎 replace each other (they teach the agent). */
   feedback?: boolean;
 }) {
   const { t, i18n } = useTranslation();
-  const { org } = useOrg();
-  const dir = useDirectory(org.id);
   const labels = useEmojiLabels();
   const { list, toggle, userId } = useMessageReactions(messageId, initial, { feedback });
   const shown = list.filter((r) => r.count > 0);
