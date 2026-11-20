@@ -247,7 +247,7 @@ function ByPerson({ team, groups }: { team: Team; groups: AgentGroup[] }) {
           {/* The workspace on top; a personal workspace names none (ADR 0159), its right hand alone there. */}
           {!isPersonal(org) && (
             <span className="team-node team-node--org">
-              <OrgMark logo={org.logo} size={32} />
+              <OrgMark logo={org.logo} accent={org.accent ?? null} size={32} />
               <span className="team-node__text">
                 <b className="ac-captop">{org.name}</b>
                 <span className="muted">{t("team.chart.workspace")}</span>

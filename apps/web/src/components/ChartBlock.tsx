@@ -4,11 +4,11 @@ import {
   Button,
   Dialog,
   DialogBody,
-  gradientOf,
   paintCells,
   paintLineArea,
   useElementWidth,
 } from "@agenteschat/ui";
+import type { SkyPair } from "@agenteschat/ui/agent/engine";
 import {
   barCells,
   CHART_CELL,
@@ -32,7 +32,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { CodeBlock } from "@/components/CodeBlock";
-import { useOrg } from "@/components/org-context";
+import { useOrg, useWorkspaceColor } from "@/components/org-context";
 import { TableBox } from "@/components/TableBox";
 import { PinToDashboard } from "@/components/widgets/PinToDashboard";
 import { useDarkTheme, useGrowFrom } from "@/lib/grow";
@@ -244,7 +244,7 @@ function TipLayer({ tip }: { tip: Tip }) {
 
 function BarChart({ spec, big }: { spec: ChartSpec; big: boolean }) {
   const { i18n } = useTranslation();
-  const color = useContext(ChartAccent);
+  const color = useWorkspaceColor(useContext(ChartAccent));
   const values = spec.series[0]?.values ?? [];
   const max = Math.max(0, ...values) || 1;
   const shown = useShown();
@@ -301,7 +301,17 @@ function BarChart({ spec, big }: { spec: ChartSpec; big: boolean }) {
   );
 }
 
-function BarFill({ width, height, color, lead }: { width: number; height: number; color: AgentColor; lead: boolean }) {
+function BarFill({
+  width,
+  height,
+  color,
+  lead,
+}: {
+  width: number;
+  height: number;
+  color: AgentColor | SkyPair;
+  lead: boolean;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const cols = Math.max(1, Math.round(width / CHART_CELL));
   const rows = Math.max(1, Math.round(height / CHART_CELL));
@@ -329,7 +339,7 @@ function LineChart({
   height?: number;
 }) {
   const { i18n } = useTranslation();
-  const color = useContext(ChartAccent);
+  const color = useWorkspaceColor(useContext(ChartAccent));
   const dark = useDarkTheme();
   const shown = useShown();
   const [plot, width] = useElementWidth<HTMLDivElement>();
@@ -507,13 +517,11 @@ export function Sparkline({
 
 function PieChart({ spec, big }: { spec: ChartSpec; big: boolean }) {
   const { i18n } = useTranslation();
-  const color = useContext(ChartAccent);
+  const color = useWorkspaceColor(useContext(ChartAccent));
   const dark = useDarkTheme();
   const size = big ? 220 : 132;
   const shares = useMemo(() => chartShares(spec), [spec]);
-  // By the colors it resolves to: `sky` follows the workspace's accent.
-  const [top, bottom] = gradientOf(color);
-  const slices = useMemo(() => chartSlices([top, bottom], dark), [top, bottom, dark]);
+  const slices = useMemo(() => chartSlices(color, dark), [color, dark]);
   const values = spec.series[0]?.values ?? [];
   const total = values.reduce((a, b) => a + b, 0);
   const canvas = useRef<HTMLCanvasElement>(null);

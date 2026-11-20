@@ -332,7 +332,7 @@ function Settings({
           meta={
             personal ? undefined : (
               <span className="settings__org ac-iconline">
-                <OrgMark logo={org.logo} size={18} />
+                <OrgMark logo={org.logo} accent={org.accent ?? null} size={18} />
                 <span>{org.name}</span>
               </span>
             )
@@ -526,7 +526,7 @@ function GeneralSection() {
         <span className="settings-row__label">{t("orgLogo.label")}</span>
       </div>
       <div className="settings-row__control">
-        <OrgMark logo={org.logo} size={32} className="settings__org-logo" />
+        <OrgMark logo={org.logo} accent={org.accent ?? null} size={32} className="settings__org-logo" />
         {editable && (
           <Button size="sm" type="button" onClick={() => setLogo(true)}>
             {org.logo ? t("orgLogo.change") : t("orgLogo.add")}

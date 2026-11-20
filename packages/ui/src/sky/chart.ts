@@ -10,7 +10,7 @@ import { bayerAt, mix } from "./math";
 export const CHART_CELL = 2;
 
 /** The fill ramp, light to deep (6 tones). */
-export function chartRamp(color: AgentColorName = "sky"): string[] {
+export function chartRamp(color: AgentColorName | SkyPair = "sky"): string[] {
   const [top, bottom] = gradientOf(color);
   return [
     mix(top, "#ffffff", 0.55),
@@ -23,13 +23,13 @@ export function chartRamp(color: AgentColorName = "sky"): string[] {
 }
 
 /** The line's stroke and its points. */
-export function chartInk(color: AgentColorName = "sky", dark = false): string {
+export function chartInk(color: AgentColorName | SkyPair = "sky", dark = false): string {
   const [top, bottom] = gradientOf(color);
   return dark ? top : bottom;
 }
 
 /** The two tones of the area under a line (near the line, then farther down). */
-export function chartAreaTones(color: AgentColorName = "sky", dark = false): [string, string] {
+export function chartAreaTones(color: AgentColorName | SkyPair = "sky", dark = false): [string, string] {
   const r = chartRamp(color);
   return dark ? [r[4] as string, r[5] as string] : [r[1] as string, r[0] as string];
 }

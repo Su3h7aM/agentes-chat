@@ -49,7 +49,7 @@ import { DesktopView } from "../desktop/DesktopView";
 import { useDevices } from "../devices/queries";
 import { MachineToolButton, useToolOneClick } from "../devices/ToolOneClick";
 import { SwitchComputerDialog } from "../MachineOutages";
-import { useOrg } from "../org-context";
+import { useOrg, useWorkspaceColor } from "../org-context";
 import { colorOf } from "../Sky";
 import { SetupWait, useWaitReader } from "../WorkspaceComputer";
 import { CantShowCover, ScreenNotice, Stage } from "./covers";
@@ -701,6 +701,7 @@ export function ComputerButton({ agent, queueOnly }: { agent: Agent; queueOnly?:
 function useEntrySignal(agent: Agent, view: AgentComputerView): EntrySignal {
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
+  const color = useWorkspaceColor(colorOf(agent));
   const dir = useDirectory(org.id);
   const f = view.facts;
   if (!f) return {};
@@ -714,7 +715,7 @@ function useEntrySignal(agent: Agent, view: AgentComputerView): EntrySignal {
   if (!state) return {};
   return {
     state,
-    style: state === "live" ? ({ "--dot": gradientOf(colorOf(agent))[0] } as CSSProperties) : undefined,
+    style: state === "live" ? ({ "--dot": gradientOf(color)[0] } as CSSProperties) : undefined,
     line: entryLine(t, entry, {
       edition: f.edition,
       locale: i18n.language,

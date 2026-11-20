@@ -2460,7 +2460,7 @@ function WorkspaceMenu({ summary }: { summary: string | null }) {
         aria-label={t("shell.workspaceMenuOf", { name: org.name })}
         onClick={() => setOpen(true)}
       >
-        <OrgMark logo={org.logo} className="sidebar__org-mark" />
+        <OrgMark logo={org.logo} accent={org.accent ?? null} className="sidebar__org-mark" />
         <span className="sidebar__org-text">
           <span className="sidebar__org-name">{org.name}</span>
           {(place || summary) && (
@@ -2484,7 +2484,7 @@ function WorkspaceMenu({ summary }: { summary: string | null }) {
         anchor={trigger}
         closeLabel={t("common.close")}
         backdrop={<MenuHorizon />}
-        mark={<OrgMark logo={org.logo} size={82} />}
+        mark={<OrgMark logo={org.logo} accent={org.accent ?? null} size={82} />}
         title={org.name}
         meta={
           <>

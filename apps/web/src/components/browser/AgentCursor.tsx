@@ -10,9 +10,10 @@ import {
   glideStart,
   pointerAtRest,
 } from "@agenteschat/client";
-import { gradientOf } from "@agenteschat/ui";
+import { type AgentColor, gradientOf } from "@agenteschat/ui";
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AgentAvatar } from "@/components/AgentAvatar";
+import { useWorkspaceColor } from "@/components/org-context";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import "./agent-cursor.css";
 
@@ -20,7 +21,7 @@ interface AgentCursorProps {
   agentId: string;
   name: string;
   /** The agent's color (its name in the palette). */
-  color: string | undefined;
+  color: AgentColor | undefined;
   /** Where its pointer last went; `n` changes with every gesture. Null draws nothing. */
   pointer: CountedPointer | null;
 }
@@ -33,6 +34,7 @@ interface AgentCursorProps {
  * scale. Decoration: the steps beside it say what the agent does.
  */
 export function AgentCursor({ agentId, name, color, pointer }: AgentCursorProps) {
+  const drawnColor = useWorkspaceColor(color);
   const reduced = usePrefersReducedMotion();
   const cursor = useRef<HTMLSpanElement>(null);
   const at = useRef<CursorSpot | null>(null);
@@ -110,7 +112,7 @@ export function AgentCursor({ agentId, name, color, pointer }: AgentCursorProps)
   }, [rings.length]);
 
   if (!pointer) return null;
-  const [, deep] = gradientOf(color);
+  const [, deep] = gradientOf(drawnColor);
   const frame = {
     aspectRatio: `${pointer.width} / ${pointer.height}`,
     width: `min(100cqw, 100cqh * ${pointer.width / pointer.height})`,

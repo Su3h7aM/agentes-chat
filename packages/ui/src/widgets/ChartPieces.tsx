@@ -4,7 +4,7 @@
  * themselves come from `../sky/chart`, DOM-free, as the phone draws them.
  */
 import { type RefObject, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { AgentColorName } from "../agent/engine.js";
+import type { AgentColorName, SkyPair } from "../agent/engine.js";
 import { cx } from "../cx";
 import { useDarkTheme } from "../hooks/useDarkTheme";
 import { areaCells, CHART_CELL, chartAreaTones, chartInk, linePoints, lineTops, smoothPath } from "../sky/chart";
@@ -76,7 +76,7 @@ export function paintLineArea(
   points: readonly (readonly [number, number])[],
   width: number,
   height: number,
-  color: AgentColorName,
+  color: AgentColorName | SkyPair,
   dark: boolean,
   bleed = false,
 ) {

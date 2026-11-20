@@ -1,4 +1,5 @@
 import type { Me, OrgSummary } from "@agenteschat/client";
+import { type AgentColor, workspaceSky } from "@agenteschat/ui";
 import { createContext, type ReactNode, useContext, useMemo } from "react";
 
 interface OrgContextValue {
@@ -23,3 +24,8 @@ export function useOrg(): OrgContextValue {
 
 /** The same, or null outside a workspace's context (the onboarding's first steps). */
 export const useOrgIfAny = () => useContext(OrgContext);
+
+export function useWorkspaceColor(color: AgentColor | undefined) {
+  const accent = useOrgIfAny()?.org.accent;
+  return useMemo(() => (!color || color === "sky" ? workspaceSky(accent) : color), [accent, color]);
+}

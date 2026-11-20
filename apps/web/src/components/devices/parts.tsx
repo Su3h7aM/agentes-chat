@@ -79,7 +79,7 @@ export function OwnerLine({ device, className }: { device: { ownerUserId: string
       {owner ? (
         <Avatar kind="person" size="xs" name={owner.name} imageUrl={owner.image} />
       ) : (
-        <OrgMark logo={org.logo} size={18} />
+        <OrgMark logo={org.logo} accent={org.accent ?? null} size={18} />
       )}
       {owner ? owner.name : t("devices.workspace")}
     </span>

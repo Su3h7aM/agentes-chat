@@ -381,7 +381,7 @@ export function OrgLogoDialog({ open, onClose }: { open: boolean; onClose: () =>
       onClose={onClose}
       title={t("orgLogo.title")}
       help={t("orgLogo.help")}
-      placeholder={<OrgMark logo={org.logo} size={56} />}
+      placeholder={<OrgMark logo={org.logo} accent={org.accent ?? null} size={56} />}
       hasImage={Boolean(org.logo)}
       removeLabel={t("orgLogo.remove")}
       format="image/png"
