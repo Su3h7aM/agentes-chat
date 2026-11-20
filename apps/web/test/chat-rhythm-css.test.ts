@@ -87,6 +87,12 @@ test("a card under a message stands the card gap off it, in its row or in one of
     );
   expect(gapped(".ac-msg__text,.ac-msg-media)~:is(.rq,", "margin-top", "var(--msg-card-gap)")).toBe(true);
   expect(gapped(".ac-msg--grouped:not(:has(.ac-msg__text)):has(.rq,", "--row-gap", "var(--msg-card-gap)")).toBe(true);
+  expect(
+    last(
+      '.channel__messages > .ac-msg:has(> .ac-msg__body > .rq[data-ask-kind="question"]) + .ac-msg--grouped',
+      "--row-gap",
+    ),
+  ).toBe("var(--msg-card-gap)");
 });
 
 test("the list spends the two gaps: no flex gap, and a row gives its plate's room back", () => {
