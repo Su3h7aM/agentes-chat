@@ -270,6 +270,7 @@ import { tokenizeBody } from "@/chat/body";
 import { ChatMedia } from "@/chat/ChatMedia";
 import { ChatVoice } from "@/chat/ChatVoice";
 import { ClippedBody } from "@/chat/ClippedBody";
+import { DRAWN, drawAhead } from "@/chat/draw-ahead";
 import { LongDraftNotice } from "@/chat/LongDraftNotice";
 import { useConversationLook, useConversationWallpaper } from "@/chat/look";
 import { MessageBody } from "@/chat/MessageBody";
@@ -583,6 +584,8 @@ export const MESSAGES_KEPT = 300;
 const TRIM_SLACK = 50;
 /** Pinned this long, it lets go of what is far above (shorter in tests). */
 export const trimming = { afterMs: 10_000 };
+/** The rows drawn ahead of what is on screen where the browser's anchoring is not used (`drawAhead`), at least. */
+const DRAW_AHEAD = 1200;
 /** Older pages a channel already loaded, and whether there are no more. */
 type OlderPages = { pages: MessageType[]; done: boolean };
 /** Same limit as the server (`MAX_MESSAGE_ATTACHMENTS`). */
@@ -1380,7 +1383,10 @@ function ChannelView({
   // Older pages, loaded on scroll-up. Kept in the query cache, so they belong to this session: signing
   // out clears them, and they never show to whoever signs in next in the same tab.
   const olderKey = keys.olderPages(org.id, channel.id);
-  const [older, setOlder] = useState<MessageType[]>(() => qc.getQueryData<OlderPages>(olderKey)?.pages ?? []);
+  const [{ pages: older, prepended }, setOlderWindow] = useState(() => ({
+    pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [],
+    prepended: false,
+  }));
   const [olderState, setOlderState] = useState<"idle" | "loading" | "done">(() =>
     qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle",
   );
@@ -1389,7 +1395,6 @@ function ChannelView({
   const [gap, setGap] = useState(false);
   const [newerLoading, setNewerLoading] = useState(false);
   const manualAnchor = desktopPlatform() === "linux" || !anchorsScroll();
-  const anchor = useRef<VisibleAnchor | null>(null);
   const restoredAnchor = useRef<RestoredAnchor | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
@@ -1403,16 +1408,14 @@ function ChannelView({
     api.chat
       .messages(org.id, channel.id, { before: oldest.createdAt, limit, onCards: cardsInto(qc, org.id) })
       .then((page) => {
-        // Capture the visible row at response time, after any scrolling while the request was pending.
-        const el = scroller.current;
-        if (el) anchor.current = visibleAnchor(el);
         // Drawn in slices: fifty rows in one task would hold the page still while the person scrolls on.
         startTransition(() => {
-          setOlder((prev) => {
-            const known = new Set(prev.map((m) => m.id));
-            const next = [...page.filter((m) => !known.has(m.id)), ...prev];
-            if (!gap) qc.setQueryData<OlderPages>(olderKey, { pages: next, done: page.length < limit });
-            return next;
+          setOlderWindow((prev) => {
+            const known = new Set(prev.pages.map((m) => m.id));
+            const added = page.filter((m) => !known.has(m.id));
+            const pages = added.length > 0 ? [...added, ...prev.pages] : prev.pages;
+            if (!gap) qc.setQueryData<OlderPages>(olderKey, { pages, done: page.length < limit });
+            return added.length > 0 ? { pages, prepended: true } : prev;
           });
           setOlderState(page.length < limit ? "done" : "idle");
         });
@@ -1424,7 +1427,7 @@ function ChannelView({
     const start = channelMessages.data?.[0]?.createdAt;
     const joins = !start || (page.at(-1)?.createdAt ?? "") >= start;
     const kept = joins && start ? page.filter((m) => m.createdAt < start) : page;
-    setOlder(kept);
+    setOlderWindow({ pages: kept, prepended: false });
     setGap(!joins);
     setOlderState("idle");
     qc.setQueryData<OlderPages>(olderKey, { pages: joins ? kept : [], done: false });
@@ -1440,7 +1443,7 @@ function ChannelView({
         const start = channelMessages.data?.[0]?.createdAt;
         const met = page.length < OLDER_PAGE || (start !== undefined && (page.at(-1)?.createdAt ?? "") >= start);
         if (!met) {
-          setOlder([...older, ...page.filter((m) => !known.has(m.id))]);
+          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false });
           return;
         }
         showAround([...older, ...page.filter((m) => !known.has(m.id))]);
@@ -1449,17 +1452,7 @@ function ChannelView({
       .catch(() => undefined)
       .finally(() => setNewerLoading(false));
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when older rows were prepended
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    const a = anchor.current;
-    anchor.current = null;
-    if (!el || !a) return;
-    // Native anchoring covers browsers where it is trusted; Linux keeps the manual path.
-    if (!manualAnchor && anchorsScroll() && el.scrollTop > 0) return;
-    const restored = restoreAnchorPosition(el, a);
-    if (manualAnchor) restoredAnchor.current = restored;
-  }, [older, manualAnchor]);
+
   // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
   // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
   // reading them they stay, where releasing would move the conversation under them. Never under a page still
@@ -1468,7 +1461,7 @@ function ChannelView({
     if (thread || olderState === "loading") return;
     const tail = retainedOlderTail(older);
     if (!tail) return;
-    setOlder(tail);
+    setOlderWindow({ pages: tail, prepended: false });
     setOlderState((s) => (s === "done" ? "idle" : s));
     qc.setQueryData<OlderPages>(olderKey, { pages: tail, done: false });
   };
@@ -1663,7 +1656,7 @@ function ChannelView({
   trimNow.current = () => {
     if (thread || gap || olderState === "loading" || !stick.current) return;
     if (older.length > 0) {
-      setOlder([]);
+      setOlderWindow({ pages: [], prepended: false });
       setOlderState("idle");
       qc.removeQueries({ queryKey: olderKey, exact: true });
     }
@@ -1857,6 +1850,10 @@ function ChannelView({
       } else followRef.current();
     };
     const heights = manualAnchor ? new WeakMap<Element, number>() : null;
+    // Rows come into view already drawn, so they take their height while out of sight (`drawAhead`).
+    const drawn = new Set<Element>();
+    const drawNear = () => drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawn);
+    if (heights) el.addEventListener("scroll", drawNear, { passive: true });
     const hold = (entries: ResizeObserverEntry[]) => {
       if (!heights) return;
       const saved = restoredAnchor.current;
@@ -1917,8 +1914,10 @@ function ChannelView({
     return () => {
       restoredAnchor.current = null;
       clearTimeout(later);
+      el.removeEventListener("scroll", drawNear);
       ro.disconnect();
       mo?.disconnect();
+      for (const row of drawn) row.removeAttribute(DRAWN);
     };
   }, [isMember, manualAnchor]);
   const lastKey = timeline.at(-1)?.key;
@@ -1928,7 +1927,7 @@ function ChannelView({
     // Away from the latest page: back to it.
     if (gap) {
       setGap(false);
-      setOlder([]);
+      setOlderWindow({ pages: [], prepended: false });
       setOlderState("idle");
     }
     markRead();
@@ -2923,7 +2922,6 @@ function ChannelView({
                             data-look={look.style}
                             data-faces={look.faces ? undefined : "false"}
                             data-wallpaper={wallpaper?.wallpaper.kind}
-                            data-manual-anchor={anchorsScroll() ? undefined : ""}
                             aria-label={t("channel.messages")}
                             aria-live="polite"
                             aria-relevant="additions"
@@ -2942,11 +2940,6 @@ function ChannelView({
                             onPointerDown={(e) => (e.target === e.currentTarget ? markUpGesture() : markGesture())}
                             onKeyDown={(e) => (isScrollUpKey(e) ? markUpGesture() : markGesture())}
                             onScroll={(e) => {
-                              const pendingAnchor = anchor.current;
-                              if (pendingAnchor && e.currentTarget.contains(pendingAnchor.row))
-                                pendingAnchor.top =
-                                  pendingAnchor.row.getBoundingClientRect().top -
-                                  e.currentTarget.getBoundingClientRect().top;
                               const previousTop = lastScrollTop.current;
                               lastScrollTop.current = e.currentTarget.scrollTop;
                               measureFar(e.currentTarget);
@@ -3103,6 +3096,7 @@ function ChannelView({
                                   scroller={scroller}
                                   stick={stick}
                                   restoredAnchor={manualAnchor ? restoredAnchor : undefined}
+                                  prependedPage={prepended ? older : undefined}
                                 />
                                 {repliesPending && (
                                   <LoadingConversation count={Math.min((thread?.replyCount ?? 0) + 1, 6)} />
@@ -3582,18 +3576,23 @@ class ProgressiveAnchor extends Component<{
   scroller: RefObject<HTMLElement | null>;
   stick: RefObject<boolean>;
   restoredAnchor?: RefObject<RestoredAnchor | null>;
+  prependedPage?: readonly MessageType[];
   children: ReactNode;
 }> {
   getSnapshotBeforeUpdate(previous: Readonly<this["props"]>): VisibleAnchor | null {
-    const { whole, scroller, stick, restoredAnchor } = this.props;
+    const { whole, scroller, stick, restoredAnchor, prependedPage } = this.props;
     const el = scroller.current;
-    return restoredAnchor && !previous.whole && whole && el && !stick.current ? visibleAnchor(el) : null;
+    const pageArrived = prependedPage && prependedPage !== previous.prependedPage;
+    const expanded = restoredAnchor && !previous.whole && whole && !stick.current;
+    return el && (pageArrived || expanded) ? visibleAnchor(el) : null;
   }
 
   componentDidUpdate(_previous: Readonly<this["props"]>, _state: unknown, anchor: VisibleAnchor | null) {
     const { scroller, restoredAnchor } = this.props;
     const el = scroller.current;
-    if (el && anchor && restoredAnchor) restoredAnchor.current = restoreAnchorPosition(el, anchor);
+    if (!el || !anchor) return;
+    const restored = restoreAnchorPosition(el, anchor);
+    if (restoredAnchor) restoredAnchor.current = restored;
   }
 
   render() {
@@ -3627,6 +3626,7 @@ const Timeline = memo(function Timeline({
   scroller,
   stick,
   restoredAnchor,
+  prependedPage,
 }: {
   items: ReturnType<typeof buildTimeline>;
   directory: Directory;
@@ -3656,6 +3656,7 @@ const Timeline = memo(function Timeline({
   scroller: RefObject<HTMLElement | null>;
   stick: RefObject<boolean>;
   restoredAnchor?: RefObject<RestoredAnchor | null>;
+  prependedPage?: readonly MessageType[];
 }) {
   const { t, i18n } = useTranslation();
   // A conversation opening at its end shows its last rows: they are drawn first and the rest in a transition, which
@@ -3880,7 +3881,13 @@ const Timeline = memo(function Timeline({
   // so streaming never retries it, and its final message landing does.
   return (
     <OpenThreadContext.Provider value={openThreadId}>
-      <ProgressiveAnchor whole={whole} scroller={scroller} stick={stick} restoredAnchor={restoredAnchor}>
+      <ProgressiveAnchor
+        whole={whole}
+        scroller={scroller}
+        stick={stick}
+        restoredAnchor={restoredAnchor}
+        prependedPage={prependedPage}
+      >
         <ConsultGroupsProvider value={consultGroups}>
           <StopsProvider value={stops}>
             {rows.map((row) => (

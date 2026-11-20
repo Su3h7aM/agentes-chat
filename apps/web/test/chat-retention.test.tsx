@@ -4,6 +4,7 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import { act, cleanup, fireEvent } from "@testing-library/react";
+import { DRAWN } from "@/chat/draw-ahead";
 import { createFakeApi, ENG_ID, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
@@ -168,6 +169,84 @@ describe("the older pages a channel keeps", () => {
     log.scrollTop = 80;
     await act(async () => fireEvent.scroll(log));
     await act(async () => release());
+    await settle(3);
+    expect(log.scrollTop).toBe(580);
+  }, 15_000);
+
+  test("where the list holds its own place, rows near the screen are drawn as it scrolls", async () => {
+    const nativeObserver = globalThis.ResizeObserver;
+    const desktop = window as typeof window & { __agentesDesktop?: unknown };
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const drawn = (log: HTMLElement) => log.querySelectorAll(`.ac-msg[${DRAWN}]`).length;
+    try {
+      desktop.__agentesDesktop = { platform: "linux" };
+      await open();
+      const log = screen().getByRole("region", { name: "Mensagens" });
+      expect(drawn(log)).toBe(0);
+      await act(async () => {
+        fireEvent.wheel(log, { deltaY: -40 });
+        fireEvent.scroll(log);
+      });
+      expect(drawn(log)).toBeGreaterThan(0);
+      cleanup();
+      expect(drawn(log)).toBe(0);
+      // Another platform: the browser's own scroll anchoring holds the place, and rows stay skipped until seen.
+      delete desktop.__agentesDesktop;
+      const supports = CSS.supports;
+      CSS.supports = () => true;
+      try {
+        await open();
+        const other = screen().getByRole("region", { name: "Mensagens" });
+        await act(async () => fireEvent.scroll(other));
+        expect(drawn(other)).toBe(0);
+      } finally {
+        CSS.supports = supports;
+      }
+    } finally {
+      cleanup();
+      delete desktop.__agentesDesktop;
+      globalThis.ResizeObserver = nativeObserver;
+    }
+  }, 15_000);
+
+  test("a scroll between a page arriving and its rows being put in is not undone", async () => {
+    const api = createFakeApi(withHistory());
+    const read = api.chat.messages.bind(api.chat);
+    let release = () => {};
+    api.chat.messages = async (...args: Parameters<typeof read>) => {
+      if (args[2]?.before)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      return read(...args);
+    };
+    await open(api);
+    const log = screen().getByRole("region", { name: "Mensagens" });
+    const arrived = () => Boolean(screen().queryByText("história 200"));
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => (arrived() ? 4800 : 4000) });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
+    const row = screen().getByText("história 250").closest(".ac-msg") as HTMLElement;
+    log.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
+    row.getBoundingClientRect = () => {
+      const top = 140 + (arrived() ? 500 : 0) - log.scrollTop;
+      return { top, bottom: top + 40 } as DOMRect;
+    };
+    log.scrollTop = 120;
+    await act(async () => {
+      fireEvent.wheel(log, { deltaY: -40 });
+      fireEvent.scroll(log);
+    });
+    // The response is handled and the page waits to be drawn; the person keeps scrolling (their scroll event is yet to
+    // come). The row they read stays where it is on screen, 40px lower than the page's arrival found it.
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      log.scrollTop = 80;
+    });
     await settle(3);
     expect(log.scrollTop).toBe(580);
   }, 15_000);

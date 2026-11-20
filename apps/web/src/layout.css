@@ -1242,6 +1242,11 @@ html:not([data-pointer]) .sidebar__user:focus-visible {
 .channel__messages[data-manual-anchor] {
   overflow-anchor: none;
 }
+/* …and a row skipped at its placeholder grows as its last pixels cross the top edge, in the frame that is painted:
+   the ones near the screen are drawn ahead (`chat/draw-ahead.ts`). */
+.channel__messages[data-manual-anchor] > .ac-msg[data-drawn] {
+  content-visibility: visible;
+}
 /* A message that @mentions the viewer: a tinted row, its corners all round. No accent bar on its left edge: the tint
    and the name in the words say it. No other row carries a plate at rest (only a hover on someone else's row, an open
    menu or a linked message, and those pass). */

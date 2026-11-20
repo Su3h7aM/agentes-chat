@@ -3,7 +3,9 @@
  *
  * Rows off screen are drawn late (`content-visibility: auto`), so one above what the person reads can change height
  * after they scrolled past where it will be. Browsers with scroll anchoring move the list by as much, so nothing on
- * screen shifts. Where native anchoring is unavailable or unreliable, `anchorShift` moves the list.
+ * screen shifts. Where native anchoring is unavailable or unreliable, `anchorShift` moves the list, and the rows about to
+ * come into view are drawn ahead (`draw-ahead.ts`): one skipped at its placeholder grows only after the frame's observers
+ * ran, too late for `anchorShift` to hold that frame.
  */
 
 /** A row whose height changed: its top now, in the list's content (0 = the content's top), and its height before and now. */
