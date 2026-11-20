@@ -1377,7 +1377,7 @@ function ChannelView({
   // pages come as the person scrolls down, until they reach it.
   const [gap, setGap] = useState(false);
   const [newerLoading, setNewerLoading] = useState(false);
-  const anchor = useRef<{ row: HTMLElement; top: number } | null>(null);
+  const anchor = useRef<{ row: Element; top: number } | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
     if (thread || olderState !== "idle" || !messages.data) return;
@@ -1390,10 +1390,24 @@ function ChannelView({
     api.chat
       .messages(org.id, channel.id, { before: oldest.createdAt, limit, onCards: cardsInto(qc, org.id) })
       .then((page) => {
-        // Keep what's on screen where it is: the list moves down by what lands above the oldest row it holds.
+        // Capture the visible row at response time, after any scrolling while the request was pending.
         const el = scroller.current;
-        const row = el?.querySelector<HTMLElement>(".ac-msg");
-        if (el && row) anchor.current = { row, top: topInList(el, row) };
+        if (el) {
+          const box = el.getBoundingClientRect();
+          let row: Element | undefined;
+          for (const child of el.children) {
+            if (child.classList.contains("channel__spacer")) continue;
+            const rect = child.getBoundingClientRect();
+            if (rect.bottom <= box.top || rect.top >= box.bottom) continue;
+            row ??= child;
+            // A day divider can move above the new rows; prefer a message that stays in place among them.
+            if (child.classList.contains("ac-msg")) {
+              row = child;
+              break;
+            }
+          }
+          anchor.current = row ? { row, top: row.getBoundingClientRect().top - box.top } : null;
+        }
         // Drawn in slices: fifty rows in one task would hold the page still while the person scrolls on.
         startTransition(() => {
           setOlder((prev) => {
@@ -1441,12 +1455,13 @@ function ChannelView({
   useLayoutEffect(() => {
     const el = scroller.current;
     const a = anchor.current;
-    if (!el || !a) return;
     anchor.current = null;
-    // Scroll anchoring already moved a list that isn't at its very top (Chromium, measured: also when only read here).
+    if (!el || !a || !el.contains(a.row)) return;
+    // Native scroll anchoring already moved a list that isn't at its very top.
     if (anchorsScroll() && el.scrollTop > 0) return;
     // By what came above, not back to where the list was: the person may have scrolled on since the page was asked for.
-    if (a.row.isConnected) el.scrollTop += topInList(el, a.row) - a.top;
+    const shift = a.row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+    if (shift !== 0) el.scrollTop += shift;
   }, [older]);
   // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
   // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
@@ -2917,6 +2932,11 @@ function ChannelView({
                             onPointerDown={(e) => (e.target === e.currentTarget ? markUpGesture() : markGesture())}
                             onKeyDown={(e) => (isScrollUpKey(e) ? markUpGesture() : markGesture())}
                             onScroll={(e) => {
+                              const pendingAnchor = anchor.current;
+                              if (pendingAnchor && e.currentTarget.contains(pendingAnchor.row))
+                                pendingAnchor.top =
+                                  pendingAnchor.row.getBoundingClientRect().top -
+                                  e.currentTarget.getBoundingClientRect().top;
                               const previousTop = lastScrollTop.current;
                               lastScrollTop.current = e.currentTarget.scrollTop;
                               measureFar(e.currentTarget);
