@@ -3129,7 +3129,7 @@ html:not([data-pointer]) .ac-tab:focus-visible {
 .ac-dialog__titles + .ac-dialog__acts {
   align-self: center;
 }
-.ac-actline:has(> .ac-dialog__titles > .ac-dialog__sub:not(:empty)) + .ac-dialog__close {
+.ac-dialog__head:has(> .ac-actline > .ac-dialog__titles > .ac-dialog__sub:not(:empty)) > .ac-dialog__close {
   height: 42px;
 }
 /*

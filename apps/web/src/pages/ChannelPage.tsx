@@ -584,6 +584,11 @@ export const MESSAGES_KEPT = 300;
 const TRIM_SLACK = 50;
 /** Pinned this long, it lets go of what is far above (shorter in tests). */
 export const trimming = { afterMs: 10_000 };
+/**
+ * Older rows drawn per frame as a page arrives: a whole page at once is one long layout, and WebKitGTK paints
+ * the frame before the scroll position is restored, so the conversation jumps under the reader.
+ */
+const OLDER_REVEAL = 10;
 /** The rows drawn ahead of what is on screen where the browser's anchoring is not used (`drawAhead`), at least. */
 const DRAW_AHEAD = 1200;
 /** Older pages a channel already loaded, and whether there are no more. */
@@ -1383,10 +1388,25 @@ function ChannelView({
   // Older pages, loaded on scroll-up. Kept in the query cache, so they belong to this session: signing
   // out clears them, and they never show to whoever signs in next in the same tab.
   const olderKey = keys.olderPages(org.id, channel.id);
-  const [{ pages: older, prepended }, setOlderWindow] = useState(() => ({
+  const [{ pages, prepended, hidden }, setOlderWindow] = useState(() => ({
     pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [],
     prepended: false,
+    hidden: 0,
   }));
+  const older = useMemo(() => (hidden ? pages.slice(hidden) : pages), [pages, hidden]);
+  useEffect(() => {
+    if (!hidden) return;
+    const frame = requestAnimationFrame(() =>
+      startTransition(() =>
+        setOlderWindow((prev) =>
+          prev.pages === pages && prev.hidden === hidden
+            ? { ...prev, hidden: Math.max(0, hidden - OLDER_REVEAL) }
+            : prev,
+        ),
+      ),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [hidden, pages]);
   const [olderState, setOlderState] = useState<"idle" | "loading" | "done">(() =>
     qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle",
   );
@@ -1398,7 +1418,7 @@ function ChannelView({
   const restoredAnchor = useRef<RestoredAnchor | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
-    if (thread || olderState !== "idle" || !messages.data) return;
+    if (thread || hidden || olderState !== "idle" || !messages.data) return;
     const oldest = older[0] ?? messages.data[0];
     if (!oldest || messages.data.length < MESSAGES_PAGE) {
       setOlderState("done");
@@ -1407,19 +1427,20 @@ function ChannelView({
     setOlderState("loading");
     api.chat
       .messages(org.id, channel.id, { before: oldest.createdAt, limit, onCards: cardsInto(qc, org.id) })
-      .then((page) => {
-        // Drawn in slices: fifty rows in one task would hold the page still while the person scrolls on.
+      .then((page) =>
         startTransition(() => {
           setOlderWindow((prev) => {
             const known = new Set(prev.pages.map((m) => m.id));
             const added = page.filter((m) => !known.has(m.id));
             const pages = added.length > 0 ? [...added, ...prev.pages] : prev.pages;
             if (!gap) qc.setQueryData<OlderPages>(olderKey, { pages, done: page.length < limit });
-            return added.length > 0 ? { pages, prepended: true } : prev;
+            return added.length > 0
+              ? { pages, prepended: true, hidden: Math.max(0, added.length - OLDER_REVEAL) }
+              : prev;
           });
           setOlderState(page.length < limit ? "done" : "idle");
-        });
-      })
+        }),
+      )
       .catch(() => setOlderState("idle"));
   };
   /** Shows the page around a message: joined to the latest page when they meet, apart (`gap`) when not. */
@@ -1427,7 +1448,7 @@ function ChannelView({
     const start = channelMessages.data?.[0]?.createdAt;
     const joins = !start || (page.at(-1)?.createdAt ?? "") >= start;
     const kept = joins && start ? page.filter((m) => m.createdAt < start) : page;
-    setOlderWindow({ pages: kept, prepended: false });
+    setOlderWindow({ pages: kept, prepended: false, hidden: 0 });
     setGap(!joins);
     setOlderState("idle");
     qc.setQueryData<OlderPages>(olderKey, { pages: joins ? kept : [], done: false });
@@ -1443,7 +1464,7 @@ function ChannelView({
         const start = channelMessages.data?.[0]?.createdAt;
         const met = page.length < OLDER_PAGE || (start !== undefined && (page.at(-1)?.createdAt ?? "") >= start);
         if (!met) {
-          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false });
+          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false, hidden: 0 });
           return;
         }
         showAround([...older, ...page.filter((m) => !known.has(m.id))]);
@@ -1458,10 +1479,10 @@ function ChannelView({
   // reading them they stay, where releasing would move the conversation under them. Never under a page still
   // loading: asked for from the oldest row before the release, it would land past a gap no one fills.
   const releaseFarOlder = () => {
-    if (thread || olderState === "loading") return;
+    if (thread || hidden || olderState === "loading") return;
     const tail = retainedOlderTail(older);
     if (!tail) return;
-    setOlderWindow({ pages: tail, prepended: false });
+    setOlderWindow({ pages: tail, prepended: false, hidden: 0 });
     setOlderState((s) => (s === "done" ? "idle" : s));
     qc.setQueryData<OlderPages>(olderKey, { pages: tail, done: false });
   };
@@ -1607,7 +1628,9 @@ function ChannelView({
     if (farFrame.current) return;
     farFrame.current = requestAnimationFrame(() => {
       farFrame.current = 0;
-      setFar(!farPinned.current && screenAboveEnd(el.scrollHeight - el.scrollTop - el.clientHeight, el.clientHeight));
+      const next =
+        !farPinned.current && screenAboveEnd(el.scrollHeight - el.scrollTop - el.clientHeight, el.clientHeight);
+      setFar((was) => (was === next ? was : next));
     });
   };
   useEffect(() => () => cancelAnimationFrame(farFrame.current), []);
@@ -1656,7 +1679,7 @@ function ChannelView({
   trimNow.current = () => {
     if (thread || gap || olderState === "loading" || !stick.current) return;
     if (older.length > 0) {
-      setOlderWindow({ pages: [], prepended: false });
+      setOlderWindow({ pages: [], prepended: false, hidden: 0 });
       setOlderState("idle");
       qc.removeQueries({ queryKey: olderKey, exact: true });
     }
@@ -1927,7 +1950,7 @@ function ChannelView({
     // Away from the latest page: back to it.
     if (gap) {
       setGap(false);
-      setOlderWindow({ pages: [], prepended: false });
+      setOlderWindow({ pages: [], prepended: false, hidden: 0 });
       setOlderState("idle");
     }
     markRead();
@@ -2894,15 +2917,7 @@ function ChannelView({
                       </div>
                     ) : (
                       <>
-                        {olderState === "loading" && (
-                          <div className="channel__older" role="status">
-                            <span className="channel__older-pill">
-                              <Spinner size={14} />
-                              {t("channel.loadingOlder")}
-                            </span>
-                          </div>
-                        )}
-                        {olderState !== "loading" && <DatePill scroller={scroller} ref={datePill} />}
+                        <DatePill scroller={scroller} ref={datePill} />
                         <RowsProvider
                           asks={askRegistry}
                           stop={stopTarget?.runId}
@@ -2951,7 +2966,12 @@ function ChannelView({
                                 (byPerson && selectingIn(e.currentTarget));
                               if (byPerson) datePill.current?.poke();
                               const ahead = e.currentTarget.clientHeight * PAGE_AHEAD_SCREENS;
-                              if (byPerson && e.currentTarget.scrollTop <= ahead) loadOlder();
+                              // Near the top, any gesture loads; going up, the next page is asked for screens ahead, so
+                              // it lands out of sight instead of under the rows being read.
+                              const top = e.currentTarget.scrollTop;
+                              const goingUp = upByPerson && (previousTop === null || top <= previousTop);
+                              if ((byPerson && top < 240) || (goingUp && top < 4 * e.currentTarget.clientHeight))
+                                loadOlder();
                               if (upByPerson && previousTop !== null && e.currentTarget.scrollTop < previousTop) {
                                 letGo();
                                 return;
@@ -3004,7 +3024,16 @@ function ChannelView({
                                 />
                               )}
                             {/* Pushes short channels down, next to the composer. */}
-                            <div className="channel__spacer" aria-hidden="true" />
+                            <div className="channel__spacer">
+                              {olderState === "loading" && (
+                                <div className="channel__older" role="status">
+                                  <span className="channel__older-pill">
+                                    <Spinner size={14} />
+                                    {t("channel.loadingOlder")}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                             {chrome?.top}
                             {!introPending && chrome?.intro}
                             {(messages.isLoading || introPending) && <LoadingConversation />}

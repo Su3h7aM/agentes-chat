@@ -140,12 +140,15 @@ describe("the older pages a channel keeps", () => {
   test("a page arriving preserves the row being read even when the end grows", async () => {
     const api = createFakeApi(withHistory());
     const read = api.chat.messages.bind(api.chat);
+    let olderRequests = 0;
     let release = () => {};
     api.chat.messages = async (...args: Parameters<typeof read>) => {
-      if (args[2]?.before)
+      if (args[2]?.before) {
+        olderRequests++;
         await new Promise<void>((resolve) => {
           release = resolve;
         });
+      }
       return read(...args);
     };
     await open(api);
@@ -159,15 +162,23 @@ describe("the older pages a channel keeps", () => {
       const top = 140 + (arrived() ? 500 : 0) - log.scrollTop;
       return { top, bottom: top + 40 } as DOMRect;
     };
-    log.scrollTop = 120;
+    log.scrollTop = 1600;
+    await act(async () => {
+      fireEvent.wheel(log, { deltaY: 40 });
+      fireEvent.scroll(log);
+    });
+    expect(olderRequests).toBe(0);
+    log.scrollTop = 1500;
     await act(async () => {
       fireEvent.wheel(log, { deltaY: -40 });
       fireEvent.scroll(log);
     });
+    expect(olderRequests).toBe(1);
     expect(screen().getByRole("region", { name: "Mensagens" })).toBe(log);
-    expect(log.scrollTop).toBe(120);
+    expect(log.scrollTop).toBe(1500);
     log.scrollTop = 80;
     await act(async () => fireEvent.scroll(log));
+    expect(olderRequests).toBe(1);
     await act(async () => release());
     await settle(3);
     expect(log.scrollTop).toBe(580);
