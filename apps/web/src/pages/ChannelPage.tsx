@@ -263,6 +263,7 @@ import {
   type RestoredAnchor,
   type RowResize,
   restoreAnchorPosition,
+  settleAnchor,
   type VisibleAnchor,
   visibleAnchor,
 } from "@/chat/anchor";
@@ -1616,6 +1617,23 @@ function ChannelView({
   // Newest at the bottom: follow new messages and streaming text while the person is at the
   // bottom; if they scrolled up, the round button at the top right leads back instead of jumping.
   const scroller = useRef<HTMLElement>(null);
+  // The scroll position this code wrote: its scroll event is our adjustment, not the person's.
+  const programmaticScroll = useRef<number | null>(null);
+  const settleScroll = useRef<(() => void) | null>(null);
+  const scrollNow = (el: HTMLElement, top: number) => {
+    el.scrollTop = top;
+    programmaticScroll.current = el.scrollTop;
+  };
+  const scrollByOurselves = (el: HTMLElement) => {
+    const written = programmaticScroll.current;
+    if (written === null) return false;
+    programmaticScroll.current = null;
+    return Math.abs(el.scrollTop - written) <= 1;
+  };
+  const stopSettle = () => {
+    settleScroll.current?.();
+    settleScroll.current = null;
+  };
   // More than a screen above the end: the round button shows even with nothing new below. Never while pinned to
   // the end, so it stays gone while its own click glides down.
   const [far, setFar] = useState(false);
@@ -1657,6 +1675,8 @@ function ChannelView({
   const lastGesture = useRef(0);
   const markGesture = () => {
     lastGesture.current = Date.now();
+    programmaticScroll.current = null;
+    stopSettle();
   };
   // The last gesture that can move the list up (wheel up, an up key, a finger, the scrollbar). Only a scroll up
   // right after one of these lets go of the bottom: content at the end shrinking clamps scrollTop lower too, and
@@ -1665,11 +1685,15 @@ function ChannelView({
   const markUpGesture = () => {
     lastGesture.current = Date.now();
     lastUpGesture.current = lastGesture.current;
+    programmaticScroll.current = null;
+    stopSettle();
   };
   // The last wheel or finger: a window without focus is still being read while these come (a click doesn't count).
   const lastScrollGesture = useRef(0);
   const markScrollGesture = () => {
     lastScrollGesture.current = Date.now();
+    programmaticScroll.current = null;
+    stopSettle();
   };
   // Pinned to the end a while, the conversation keeps only its newest messages: the pages loaded above leave and the
   // latest list keeps `MESSAGES_KEPT`, so a long session on a busy channel stops growing (rows, memory, the work of
@@ -1830,7 +1854,7 @@ function ChannelView({
         if (smooth && !reducedMotionRef.current && typeof el.scrollTo === "function") {
           autoScrollUntil.current = Date.now() + 600;
           el.scrollTo({ top: land.top, behavior: "smooth" });
-        } else el.scrollTop = land.top;
+        } else scrollNow(el, land.top);
         return;
       }
     }
@@ -1838,7 +1862,7 @@ function ChannelView({
       autoScrollUntil.current = Date.now() + 600;
       glideEnd.current = el.scrollHeight - el.clientHeight;
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    } else el.scrollTop = el.scrollHeight;
+    } else scrollNow(el, el.scrollHeight);
     clearUnseen();
   };
   const followRef = useRef(follow);
@@ -1903,7 +1927,7 @@ function ChannelView({
       const shift = restored
         ? restored.row.getBoundingClientRect().top - el.getBoundingClientRect().top + scrollTop - restored.contentTop
         : anchorShift(resized, scrollTop);
-      if (shift !== 0) el.scrollTop += shift;
+      if (shift !== 0) scrollNow(el, scrollTop + shift);
     };
     // What stands above the list folding away (the day's greeting, a bar) moves its top edge up: read further up, the
     // words on screen stay where they are. Only up: what appears above it as the conversation opens is where the
@@ -1913,7 +1937,9 @@ function ChannelView({
     let top = edge();
     const keep = () => {
       const now = edge();
-      if (now < top && !stick.current && Date.now() >= autoScrollUntil.current) el.scrollTop -= top - now;
+      if (now < top && !stick.current && Date.now() >= autoScrollUntil.current) {
+        scrollNow(el, el.scrollTop - (top - now));
+      }
       top = now;
     };
     const ro = new ResizeObserver((entries) => {
@@ -1961,7 +1987,7 @@ function ChannelView({
         autoScrollUntil.current = Date.now() + 600;
         glideEnd.current = el.scrollHeight - el.clientHeight;
         el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      } else el.scrollTop = el.scrollHeight;
+      } else scrollNow(el, el.scrollHeight);
     }
     stick.current = true;
     setHold(false);
@@ -2601,7 +2627,7 @@ function ChannelView({
         }
         autoScrollUntil.current = Date.now() + 600;
         if (!reducedMotion && typeof el.scrollTo === "function") el.scrollTo({ top: top - 12, behavior: "smooth" });
-        else el.scrollTop = top - 12;
+        else scrollNow(el, top - 12);
         clearUnseen();
         return;
       }
@@ -2958,12 +2984,15 @@ function ChannelView({
                               const previousTop = lastScrollTop.current;
                               lastScrollTop.current = e.currentTarget.scrollTop;
                               measureFar(e.currentTarget);
+                              const ours = scrollByOurselves(e.currentTarget);
+                              if (!ours) stopSettle();
                               // Only the person scrolling unpins (or loads older pages); layout changes never do.
-                              const byPerson = Date.now() - lastGesture.current < GESTURE_MS;
+                              const byPerson = !ours && Date.now() - lastGesture.current < GESTURE_MS;
                               // A drag selecting text past the top edge scrolls up too: the person is reading.
                               const upByPerson =
-                                Date.now() - lastUpGesture.current < GESTURE_MS ||
-                                (byPerson && selectingIn(e.currentTarget));
+                                !ours &&
+                                (Date.now() - lastUpGesture.current < GESTURE_MS ||
+                                  (byPerson && selectingIn(e.currentTarget)));
                               if (byPerson) datePill.current?.poke();
                               const ahead = e.currentTarget.clientHeight * PAGE_AHEAD_SCREENS;
                               // Near the top, any gesture loads; going up, the next page is asked for screens ahead, so
@@ -3125,6 +3154,8 @@ function ChannelView({
                                   scroller={scroller}
                                   stick={stick}
                                   restoredAnchor={manualAnchor ? restoredAnchor : undefined}
+                                  programmaticScroll={programmaticScroll}
+                                  settleScroll={settleScroll}
                                   prependedPage={prepended ? older : undefined}
                                 />
                                 {repliesPending && (
@@ -3605,6 +3636,8 @@ class ProgressiveAnchor extends Component<{
   scroller: RefObject<HTMLElement | null>;
   stick: RefObject<boolean>;
   restoredAnchor?: RefObject<RestoredAnchor | null>;
+  programmaticScroll?: RefObject<number | null>;
+  settleScroll?: RefObject<(() => void) | null>;
   prependedPage?: readonly MessageType[];
   children: ReactNode;
 }> {
@@ -3617,11 +3650,22 @@ class ProgressiveAnchor extends Component<{
   }
 
   componentDidUpdate(_previous: Readonly<this["props"]>, _state: unknown, anchor: VisibleAnchor | null) {
-    const { scroller, restoredAnchor } = this.props;
+    const { scroller, restoredAnchor, programmaticScroll, settleScroll } = this.props;
     const el = scroller.current;
     if (!el || !anchor) return;
     const restored = restoreAnchorPosition(el, anchor);
     if (restoredAnchor) restoredAnchor.current = restored;
+    if (programmaticScroll) programmaticScroll.current = el.scrollTop;
+    settleScroll?.current?.();
+    const stop = settleAnchor(el, anchor, (top) => {
+      el.scrollTop = top;
+      if (programmaticScroll) programmaticScroll.current = el.scrollTop;
+    });
+    if (settleScroll) settleScroll.current = stop;
+  }
+
+  componentWillUnmount() {
+    this.props.settleScroll?.current?.();
   }
 
   render() {
@@ -3655,6 +3699,8 @@ const Timeline = memo(function Timeline({
   scroller,
   stick,
   restoredAnchor,
+  programmaticScroll,
+  settleScroll,
   prependedPage,
 }: {
   items: ReturnType<typeof buildTimeline>;
@@ -3685,6 +3731,8 @@ const Timeline = memo(function Timeline({
   scroller: RefObject<HTMLElement | null>;
   stick: RefObject<boolean>;
   restoredAnchor?: RefObject<RestoredAnchor | null>;
+  programmaticScroll?: RefObject<number | null>;
+  settleScroll?: RefObject<(() => void) | null>;
   prependedPage?: readonly MessageType[];
 }) {
   const { t, i18n } = useTranslation();
@@ -3915,6 +3963,8 @@ const Timeline = memo(function Timeline({
         scroller={scroller}
         stick={stick}
         restoredAnchor={restoredAnchor}
+        programmaticScroll={programmaticScroll}
+        settleScroll={settleScroll}
         prependedPage={prependedPage}
       >
         <ConsultGroupsProvider value={consultGroups}>

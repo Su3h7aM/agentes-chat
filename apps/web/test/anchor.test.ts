@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { anchorShift, topInList } from "@/chat/anchor";
+import { anchorShift, settleAnchor, topInList } from "@/chat/anchor";
 
 describe("the list holds its place without scroll anchoring", () => {
   test("a row above the top edge that grows from its placeholder moves the list by as much", () => {
@@ -36,7 +36,6 @@ describe("the list holds its place without scroll anchoring", () => {
     expect(anchorShift([{ top: 10, before: 80, after: 80 }], 1000)).toBe(0);
   });
 });
-
 describe("where a row stands in its list", () => {
   test("its place in the content, whatever the list is scrolled to", () => {
     const box = (top: number) => ({ getBoundingClientRect: () => ({ top }) }) as unknown as HTMLElement;
@@ -45,3 +44,4 @@ describe("where a row stands in its list", () => {
     expect(topInList(list, box(140))).toBe(940);
   });
 });
+

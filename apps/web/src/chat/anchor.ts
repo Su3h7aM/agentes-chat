@@ -25,6 +25,15 @@ export interface RestoredAnchor {
   contentTop: number;
 }
 
+export interface SettleAnchorOptions {
+  frame?: (callback: FrameRequestCallback) => number;
+}
+
+/** After layout settles: two frames in the same place end the correction. */
+const SETTLE_STABLE_FRAMES = 2;
+/** A page reveal is short; a reply that keeps moving the end has its own follow logic. */
+const SETTLE_MAX_FRAMES = 60;
+
 export function visibleAnchor(list: HTMLElement): VisibleAnchor | null {
   const box = list.getBoundingClientRect();
   let first: VisibleAnchor | null = null;
@@ -45,6 +54,39 @@ export function restoreAnchorPosition(list: HTMLElement, anchor: VisibleAnchor):
   const scrollTop = list.scrollTop;
   if (top !== anchor.top) list.scrollTop = scrollTop + top - anchor.top;
   return { row: anchor.row, contentTop: top + scrollTop };
+}
+
+/**
+ * Keeps a visible row where it was after layout moves the list under it. Runs for at most 60 frames, ends once
+ * the row holds for two frames, and stops at once when the caller says the person took over.
+ */
+export function settleAnchor(
+  list: HTMLElement,
+  anchor: VisibleAnchor,
+  write: (top: number) => void,
+  { frame = requestAnimationFrame }: SettleAnchorOptions = {},
+): () => void {
+  let stopped = false;
+  let stable = 0;
+  let frames = 0;
+  const stop = () => {
+    stopped = true;
+  };
+  const reconcile = () => {
+    if (stopped || !list.contains(anchor.row)) return;
+    if (++frames > SETTLE_MAX_FRAMES) return;
+    const top = anchor.row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    if (Math.abs(top - anchor.top) <= 1) {
+      stable += 1;
+      if (stable >= SETTLE_STABLE_FRAMES) return;
+    } else {
+      stable = 0;
+      write(list.scrollTop + top - anchor.top);
+    }
+    frame(reconcile);
+  };
+  frame(reconcile);
+  return stop;
 }
 
 /**
