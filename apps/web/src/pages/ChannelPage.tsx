@@ -460,7 +460,7 @@ import { desktopPlatform, thisMac, useDocumentTitle } from "@/lib/desktop";
 import { holdOnScreen } from "@/lib/island";
 import { composes, typingInField } from "@/lib/keys";
 import { lookOf } from "@/lib/look";
-import { retainedOlderTail } from "@/lib/older-pages";
+import { advanceOlderAdmission, beginOlderAdmission, noteOlderMotion, retainedOlderTail } from "@/lib/older-pages";
 import { type AgentPanelPlace, agentPanelSearch, threadSearch, useAgentPanel, useThreadPanel } from "@/lib/open-param";
 import { reportPainted } from "@/lib/perf";
 import { useToast } from "@/lib/toast";
@@ -585,15 +585,29 @@ export const MESSAGES_KEPT = 300;
 const TRIM_SLACK = 50;
 /** Pinned this long, it lets go of what is far above (shorter in tests). */
 export const trimming = { afterMs: 10_000 };
-/**
- * Older rows drawn per frame as a page arrives: a whole page at once is one long layout, and WebKitGTK paints
- * the frame before the scroll position is restored, so the conversation jumps under the reader.
- */
-const OLDER_REVEAL = 10;
 /** The rows drawn ahead of what is on screen where the browser's anchoring is not used (`drawAhead`), at least. */
 const DRAW_AHEAD = 1200;
 /** Older pages a channel already loaded, and whether there are no more. */
 type OlderPages = { pages: MessageType[]; done: boolean };
+type OlderStatus = "idle" | "loading" | "staged" | "done";
+type OlderWindow = {
+  /** The channel whose cache these pages belong to. */
+  scope: string;
+  pages: MessageType[];
+  /** A page arrived and the prepend restore has not been claimed yet. */
+  prepended: boolean;
+  /** The admission gate owns this prepend's scroll correction. */
+  gated: boolean;
+  status: OlderStatus;
+};
+type OlderWindowFields = Pick<OlderWindow, "pages" | "prepended" | "gated">;
+/** A fetched older page waiting for the list to be quiet before it joins the conversation. */
+type StagedOlderPage = {
+  page: MessageType[];
+  limit: number;
+  request: number;
+  scope: string;
+};
 /** Same limit as the server (`MAX_MESSAGE_ATTACHMENTS`). */
 const MAX_ATTACHMENTS = 10;
 
@@ -1388,68 +1402,93 @@ function ChannelView({
 
   // Older pages, loaded on scroll-up. Kept in the query cache, so they belong to this session: signing
   // out clears them, and they never show to whoever signs in next in the same tab.
-  const olderKey = keys.olderPages(org.id, channel.id);
-  const [{ pages, prepended, hidden }, setOlderWindow] = useState(() => ({
+  const olderKey = useMemo(() => keys.olderPages(org.id, channel.id), [org.id, channel.id]);
+  const olderScope = `${org.id}:${channel.id}`;
+  const cachedOlder: OlderWindow = {
+    scope: olderScope,
     pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [],
     prepended: false,
-    hidden: 0,
-  }));
-  const older = useMemo(() => (hidden ? pages.slice(hidden) : pages), [pages, hidden]);
-  useEffect(() => {
-    if (!hidden) return;
-    const frame = requestAnimationFrame(() =>
-      startTransition(() =>
-        setOlderWindow((prev) =>
-          prev.pages === pages && prev.hidden === hidden
-            ? { ...prev, hidden: Math.max(0, hidden - OLDER_REVEAL) }
-            : prev,
-        ),
-      ),
-    );
-    return () => cancelAnimationFrame(frame);
-  }, [hidden, pages]);
-  const [olderState, setOlderState] = useState<"idle" | "loading" | "done">(() =>
-    qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle",
-  );
+    gated: false,
+    status: qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle",
+  };
+  const [olderWindow, setOlderWindowState] = useState<OlderWindow>(() => cachedOlder);
+  const windowForChannel = olderWindow.scope === olderScope ? olderWindow : cachedOlder;
+  const { pages, prepended, gated, status: olderState } = windowForChannel;
+  const older = pages;
+  const currentOlder = (window: OlderWindow) => (window.scope === olderScope ? window : cachedOlder);
+  const setOlderWindow = (
+    next: Partial<OlderWindowFields> | ((previous: OlderWindowFields) => Partial<OlderWindowFields>),
+  ) => {
+    setOlderWindowState((current) => {
+      const base = currentOlder(current);
+      const patch = typeof next === "function" ? next(base) : next;
+      return { ...base, ...patch, ...(patch.prepended === false ? { gated: false } : {}), scope: olderScope };
+    });
+  };
+  const setOlderState = (next: OlderStatus | ((status: OlderStatus) => OlderStatus)) => {
+    setOlderWindowState((current) => {
+      const base = currentOlder(current);
+      return { ...base, status: typeof next === "function" ? next(base.status) : next, scope: olderScope };
+    });
+  };
+  const [stagedOlder, setStagedOlder] = useState<StagedOlderPage | null>(null);
+  const olderBusy = useRef(false);
+  const olderRequest = useRef(0);
+  const newerRequest = useRef(0);
+  const olderScopeRef = useRef(olderScope);
   // Going to a message far back shows the page around it on its own (`older`), apart from the latest page: newer
   // pages come as the person scrolls down, until they reach it.
   const [gap, setGap] = useState(false);
+  const gapRef = useRef(gap);
+  gapRef.current = gap;
   const [newerLoading, setNewerLoading] = useState(false);
   const manualAnchor = desktopPlatform() === "linux" || !anchorsScroll();
   const restoredAnchor = useRef<RestoredAnchor | null>(null);
+  const admissionAnchor = useRef<VisibleAnchor | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
-    if (thread || hidden || olderState !== "idle" || !messages.data) return;
+    if (thread || olderBusy.current || olderState !== "idle" || !messages.data) return;
     const oldest = older[0] ?? messages.data[0];
     if (!oldest || messages.data.length < MESSAGES_PAGE) {
       setOlderState("done");
       return;
     }
+    const request = ++olderRequest.current;
+    const scope = olderScopeRef.current;
+    olderBusy.current = true;
     setOlderState("loading");
     api.chat
       .messages(org.id, channel.id, { before: oldest.createdAt, limit, onCards: cardsInto(qc, org.id) })
-      .then((page) =>
-        startTransition(() => {
-          setOlderWindow((prev) => {
-            const known = new Set(prev.pages.map((m) => m.id));
-            const added = page.filter((m) => !known.has(m.id));
-            const pages = added.length > 0 ? [...added, ...prev.pages] : prev.pages;
-            if (!gap) qc.setQueryData<OlderPages>(olderKey, { pages, done: page.length < limit });
-            return added.length > 0
-              ? { pages, prepended: true, hidden: Math.max(0, added.length - OLDER_REVEAL) }
-              : prev;
-          });
-          setOlderState(page.length < limit ? "done" : "idle");
-        }),
-      )
-      .catch(() => setOlderState("idle"));
+      .then((page) => {
+        if (request !== olderRequest.current || scope !== olderScopeRef.current) return;
+        const known = new Set(older.map((m) => m.id));
+        const added = page.filter((m) => !known.has(m.id));
+        // Nothing older, or the same page again: there is no next page to wait for.
+        if (added.length === 0) {
+          olderBusy.current = false;
+          setOlderState("done");
+          const current = qc.getQueryData<OlderPages>(olderKey)?.pages ?? older;
+          if (!gapRef.current) qc.setQueryData<OlderPages>(olderKey, { pages: current, done: true });
+          return;
+        }
+        setOlderState("staged");
+        setStagedOlder({ page: added, limit, request, scope });
+      })
+      .catch(() => {
+        if (request !== olderRequest.current || scope !== olderScopeRef.current) return;
+        olderBusy.current = false;
+        setOlderState("idle");
+      });
   };
   /** Shows the page around a message: joined to the latest page when they meet, apart (`gap`) when not. */
   const showAround = (page: MessageType[]) => {
+    olderRequest.current += 1;
+    olderBusy.current = false;
+    setStagedOlder(null);
     const start = channelMessages.data?.[0]?.createdAt;
     const joins = !start || (page.at(-1)?.createdAt ?? "") >= start;
     const kept = joins && start ? page.filter((m) => m.createdAt < start) : page;
-    setOlderWindow({ pages: kept, prepended: false, hidden: 0 });
+    setOlderWindow({ pages: kept, prepended: false });
     setGap(!joins);
     setOlderState("idle");
     qc.setQueryData<OlderPages>(olderKey, { pages: joins ? kept : [], done: false });
@@ -1457,36 +1496,55 @@ function ChannelView({
   const loadNewer = () => {
     const newest = older.at(-1);
     if (!gap || newerLoading || !newest) return;
+    const request = ++newerRequest.current;
+    const scope = olderScopeRef.current;
     setNewerLoading(true);
     api.chat
       .messages(org.id, channel.id, { after: newest.createdAt, limit: OLDER_PAGE, onCards: cardsInto(qc, org.id) })
       .then((page) => {
+        if (request !== newerRequest.current || scope !== olderScopeRef.current) return;
         const known = new Set(older.map((m) => m.id));
         const start = channelMessages.data?.[0]?.createdAt;
         const met = page.length < OLDER_PAGE || (start !== undefined && (page.at(-1)?.createdAt ?? "") >= start);
         if (!met) {
-          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false, hidden: 0 });
+          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false });
           return;
         }
         showAround([...older, ...page.filter((m) => !known.has(m.id))]);
         setGap(false);
       })
       .catch(() => undefined)
-      .finally(() => setNewerLoading(false));
+      .finally(() => {
+        if (request === newerRequest.current && scope === olderScopeRef.current) setNewerLoading(false);
+      });
   };
 
   // A long read keeps every page it loaded, each row with its author, face and cards. Back at the bottom the
   // far ones are released: they sit above what shows, and scrolling up reads them again. While the person is
-  // reading them they stay, where releasing would move the conversation under them. Never under a page still
-  // loading: asked for from the oldest row before the release, it would land past a gap no one fills.
+  // reading them they stay, where releasing would move the conversation under them. A page still on its way is
+  // not one of these: it was asked for before the release and is kept when it arrives.
   const releaseFarOlder = () => {
-    if (thread || hidden || olderState === "loading") return;
+    if (thread) return;
     const tail = retainedOlderTail(older);
     if (!tail) return;
-    setOlderWindow({ pages: tail, prepended: false, hidden: 0 });
+    setOlderWindow({ pages: tail, prepended: false });
     setOlderState((s) => (s === "done" ? "idle" : s));
     qc.setQueryData<OlderPages>(olderKey, { pages: tail, done: false });
   };
+  // A response belongs to the channel that asked for it. A route that reuses this view must not let the old one land.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the local writers would reset this once per render
+  useEffect(() => {
+    if (olderScopeRef.current === olderScope) return;
+    olderScopeRef.current = olderScope;
+    olderRequest.current += 1;
+    newerRequest.current += 1;
+    olderBusy.current = false;
+    setStagedOlder(null);
+    setOlderWindow({ pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [], prepended: false });
+    setOlderState(qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle");
+    setGap(false);
+    setNewerLoading(false);
+  }, [olderKey, olderScope, qc]);
 
   // Every thread with replies is one line under its root; its replies live in the panel.
   const threadLines = useMemo(() => {
@@ -1673,6 +1731,8 @@ function ChannelView({
   const glideEnd = useRef(0);
   // The last wheel/touch/key/pointer on the list: scroll events without one are layout, not the person.
   const lastGesture = useRef(0);
+  // A scroll the person caused without a wheel/touch/key event: a scrollbar drag, or the native scroll.
+  const olderMotionAt = useRef(0);
   const markGesture = () => {
     lastGesture.current = Date.now();
     programmaticScroll.current = null;
@@ -1703,7 +1763,7 @@ function ChannelView({
   trimNow.current = () => {
     if (thread || gap || olderState === "loading" || !stick.current) return;
     if (older.length > 0) {
-      setOlderWindow({ pages: [], prepended: false, hidden: 0 });
+      setOlderWindow({ pages: [], prepended: false });
       setOlderState("idle");
       qc.removeQueries({ queryKey: olderKey, exact: true });
     }
@@ -1730,6 +1790,82 @@ function ChannelView({
   useEffect(() => {
     if (holdsMore && stick.current) trimSoon();
   }, [holdsMore, older.length, channelMessages.data]);
+  // A fetched page waits outside the conversation until the list has been quiet for a moment and real frames show
+  // the same position. Then it joins in one update: there is no page under the reader that has to be corrected after.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: staging is the trigger; the writers must not restart the gate
+  useEffect(() => {
+    const staged = stagedOlder;
+    const el = scroller.current;
+    if (!staged || !el) return;
+    if (staged.scope !== olderScopeRef.current || staged.request !== olderRequest.current) {
+      olderBusy.current = false;
+      setStagedOlder(null);
+      setOlderState("idle");
+      return;
+    }
+    const admission = beginOlderAdmission(Date.now(), el.scrollTop);
+    let seenMotion = Math.max(lastGesture.current, olderMotionAt.current);
+    let cancelled = false;
+    let frame = 0;
+    const commit = () => {
+      if (cancelled || staged.request !== olderRequest.current || staged.scope !== olderScopeRef.current) return;
+      olderBusy.current = false;
+      setStagedOlder((current) => (current?.request === staged.request ? null : current));
+      const done = staged.page.length < staged.limit;
+      admissionAnchor.current = stick.current ? null : visibleAnchor(el);
+      setOlderWindow((prev) => {
+        const known = new Set(prev.pages.map((m) => m.id));
+        const added = staged.page.filter((m) => !known.has(m.id));
+        if (added.length === 0) return prev;
+        const pages = [...added, ...prev.pages];
+        if (!gapRef.current) qc.setQueryData<OlderPages>(olderKey, { pages, done });
+        return { pages, prepended: true, gated: true };
+      });
+      setOlderState(done ? "done" : "idle");
+      // The page is older than what a person at the end is reading: keep them at the end while it is kept loaded.
+      requestAnimationFrame(() => {
+        const list = scroller.current;
+        if (list && stick.current) {
+          list.scrollTop = list.scrollHeight;
+          programmaticScroll.current = list.scrollTop;
+        }
+      });
+    };
+    const tick = () => {
+      if (cancelled) return;
+      const motionAt = Math.max(lastGesture.current, olderMotionAt.current);
+      if (motionAt !== seenMotion) {
+        seenMotion = motionAt;
+        noteOlderMotion(admission, Date.now());
+      }
+      if (advanceOlderAdmission(admission, Date.now(), el.scrollTop) === "admit") {
+        commit();
+        return;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [olderKey, qc, stagedOlder]);
+  // The gate owns the correction for its own prepends. ProgressiveAnchor leaves those alone so only one path writes
+  // scrollTop before the next frame; manual and expanded restores keep their existing behavior.
+  useLayoutEffect(() => {
+    const anchor = admissionAnchor.current;
+    if (!anchor) return;
+    admissionAnchor.current = null;
+    const el = scroller.current;
+    if (!el?.contains(anchor.row)) return;
+    restoredAnchor.current = restoreAnchorPosition(el, anchor);
+    programmaticScroll.current = el.scrollTop;
+    settleScroll.current?.();
+    settleScroll.current = settleAnchor(el, anchor, (top) => {
+      el.scrollTop = top;
+      programmaticScroll.current = el.scrollTop;
+    });
+  });
   // Scrolling up always lets go at once: no waiting to leave the "near bottom" band or for a glide to end.
   const letGo = () => {
     stick.current = false;
@@ -1975,8 +2111,12 @@ function ChannelView({
   const toBottom = (smooth = false) => {
     // Away from the latest page: back to it.
     if (gap) {
+      olderRequest.current += 1;
+      newerRequest.current += 1;
+      olderBusy.current = false;
+      setStagedOlder(null);
       setGap(false);
-      setOlderWindow({ pages: [], prepended: false, hidden: 0 });
+      setOlderWindow({ pages: [], prepended: false });
       setOlderState("idle");
     }
     markRead();
@@ -2986,6 +3126,9 @@ function ChannelView({
                               measureFar(e.currentTarget);
                               const ours = scrollByOurselves(e.currentTarget);
                               if (!ours) stopSettle();
+                              // A real scroll event is motion even when a scrollbar drag had no wheel/touch/key event.
+                              if (!ours && previousTop !== null && e.currentTarget.scrollTop !== previousTop)
+                                olderMotionAt.current = Date.now();
                               // Only the person scrolling unpins (or loads older pages); layout changes never do.
                               const byPerson = !ours && Date.now() - lastGesture.current < GESTURE_MS;
                               // A drag selecting text past the top edge scrolls up too: the person is reading.
@@ -3156,7 +3299,7 @@ function ChannelView({
                                   restoredAnchor={manualAnchor ? restoredAnchor : undefined}
                                   programmaticScroll={programmaticScroll}
                                   settleScroll={settleScroll}
-                                  prependedPage={prepended ? older : undefined}
+                                  prependedPage={prepended && !gated ? older : undefined}
                                 />
                                 {repliesPending && (
                                   <LoadingConversation count={Math.min((thread?.replyCount ?? 0) + 1, 6)} />

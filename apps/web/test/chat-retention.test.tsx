@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Message } from "@agenteschat/client";
 import { setupDom } from "@agenteschat/ui/testing/dom";
 
 setupDom();
 
 import { act, cleanup, fireEvent } from "@testing-library/react";
 import { DRAWN } from "@/chat/draw-ahead";
+import { OLDER_ADMISSION_QUIET_MS } from "@/lib/older-pages";
 import { createFakeApi, ENG_ID, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
@@ -39,6 +41,13 @@ const open = async (api = createFakeApi(withHistory())) => {
   await act(async () => socket.open());
   await settle(2);
   return r;
+};
+
+/** Lets the fetched page pass its quiet period and stable frames. */
+const admitOlder = async () => {
+  await settle(2);
+  await act(() => new Promise((resolve) => setTimeout(resolve, OLDER_ADMISSION_QUIET_MS + 80)));
+  await settle(2);
 };
 
 describe("the older pages a channel keeps", () => {
@@ -111,6 +120,7 @@ describe("the older pages a channel keeps", () => {
       // Both the page and an existing row change before the observer delivers its notification.
       await act(async () => release());
       await settle(3);
+      await admitOlder();
       expect(log.scrollTop).toBe(640);
       await report();
       expect(log.scrollTop).toBe(640);
@@ -181,6 +191,7 @@ describe("the older pages a channel keeps", () => {
     expect(olderRequests).toBe(1);
     await act(async () => release());
     await settle(3);
+    await admitOlder();
     expect(log.scrollTop).toBe(580);
   }, 15_000);
 
@@ -259,6 +270,7 @@ describe("the older pages a channel keeps", () => {
       log.scrollTop = 80;
     });
     await settle(3);
+    await admitOlder();
     expect(log.scrollTop).toBe(580);
   }, 15_000);
 
@@ -279,6 +291,7 @@ describe("the older pages a channel keeps", () => {
         fireEvent.scroll(log);
       });
       await settle(3);
+      await admitOlder();
     };
 
     // Five pages of scroll-up read the whole history.
@@ -300,6 +313,96 @@ describe("the older pages a channel keeps", () => {
     // Scrolling up again reads what was let go from the server.
     await loadPage();
     expect(said("história 0")).toHaveLength(1);
+  }, 15_000);
+
+  test("an empty or duplicate page ends loading without waiting for motion", async () => {
+    const api = createFakeApi(withHistory());
+    const read = api.chat.messages.bind(api.chat);
+    let firstOlder: Message[] = [];
+    let olderRequests = 0;
+    let hold: Promise<void> | null = null;
+    let release = () => {};
+    api.chat.messages = async (...args: Parameters<typeof read>) => {
+      const page = await read(...args);
+      if (!args[2]?.before) return page;
+      olderRequests++;
+      if (hold) await hold;
+      if (olderRequests === 1) {
+        firstOlder = page;
+        return page;
+      }
+      // The same page again: the server made no progress toward older messages.
+      return firstOlder ?? page;
+    };
+    await open(api);
+    const log = screen().getByRole("region", { name: "Mensagens" });
+    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 4000 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
+    const olderStatus = () => log.querySelector(".channel__older")?.textContent ?? "";
+    const said = (text: string) =>
+      screen()
+        .queryAllByRole("article")
+        .filter((row) => row.textContent?.includes(text));
+    const loadPage = async () => {
+      log.scrollTop = 0;
+      await act(async () => {
+        fireEvent.wheel(log, { deltaY: -40 });
+        fireEvent.scroll(log);
+      });
+      await settle(3);
+    };
+
+    await loadPage();
+    // The request answered: admission still waits, but the spinner is for the network only.
+    expect(olderStatus()).toBe("");
+    await admitOlder();
+    expect(olderStatus()).toBe("");
+    const first = firstOlder;
+    if (first.length === 0) throw new Error("the first older page never arrived");
+    for (const message of first) expect(said(message.body)).toHaveLength(1);
+
+    hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    await loadPage();
+    expect(olderStatus()).toContain("Carregando mensagens anteriores");
+    hold = null;
+    await act(async () => release());
+    await settle(2);
+    expect(olderStatus()).toBe("");
+    expect(olderRequests).toBe(2);
+    for (const message of first) expect(said(message.body)).toHaveLength(1);
+  }, 15_000);
+
+  test("an empty page ends loading without waiting for motion", async () => {
+    const api = createFakeApi(withHistory());
+    const read = api.chat.messages.bind(api.chat);
+    let olderRequests = 0;
+    let release = () => {};
+    api.chat.messages = async (...args: Parameters<typeof read>) => {
+      if (!args[2]?.before) return read(...args);
+      olderRequests++;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [];
+    };
+    await open(api);
+    const log = screen().getByRole("region", { name: "Mensagens" });
+    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 4000 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
+    const olderStatus = () => log.querySelector(".channel__older")?.textContent ?? "";
+    log.scrollTop = 0;
+    await act(async () => {
+      fireEvent.wheel(log, { deltaY: -40 });
+      fireEvent.scroll(log);
+    });
+    await settle(3);
+    expect(olderStatus()).toContain("Carregando mensagens anteriores");
+    await act(async () => release());
+    await settle(2);
+    expect(olderRequests).toBe(1);
+    expect(olderStatus()).toBe("");
   }, 15_000);
 
   test("a page still loading when the person gets back down is kept, with no gap before it", async () => {
@@ -329,7 +432,10 @@ describe("the older pages a channel keeps", () => {
         .filter((n): n is string => n !== undefined)
         .map(Number);
 
-    for (let i = 0; i < 5; i++) await scrollTo(0, -40);
+    for (let i = 0; i < 5; i++) {
+      await scrollTo(0, -40);
+      await admitOlder();
+    }
     // One more page asked for, still on its way when the person goes back down.
     let open_ = () => {};
     gate = new Promise((resolve) => {
@@ -340,11 +446,17 @@ describe("the older pages a channel keeps", () => {
     gate = null;
     await act(async () => open_());
     await settle(3);
+    await admitOlder();
 
     const numbers = shown();
     expect(numbers.length).toBeGreaterThan(250);
-    // Every message between the oldest shown and the newest is there.
-    const oldest = Math.min(...numbers);
-    expect(new Set(numbers).size).toBe(599 - oldest + 1);
+    const unique = [...new Set(numbers)].sort((a, b) => a - b);
+    // The page on its way (203-252) is kept. The far loaded page (253-302) is let go: one gap, before 303.
+    expect(unique[0]).toBe(203);
+    const gaps = unique.slice(1).flatMap((number, i) => {
+      const before = unique[i];
+      return before !== undefined && number - before > 1 ? [{ at: number, missing: number - before - 1 }] : [];
+    });
+    expect(gaps).toEqual([{ at: 303, missing: 50 }]);
   }, 15_000);
 });
