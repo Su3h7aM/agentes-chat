@@ -66,7 +66,6 @@ test("painted on the CPU, glass is solid and nothing blurs or loops", () => {
   expect(all).toContain("-webkit-backdrop-filter: none !important");
   expect(all).toContain("animation-iteration-count: 1 !important");
 });
-
 test("with nobody looking, endless loops end their round; merely idle, they keep going", () => {
   const css = readFileSync(path.join(import.meta.dir, "../src/desktop.css"), "utf8");
   const at = css.indexOf('html[data-sight="away"] *,');
@@ -78,3 +77,21 @@ test("with nobody looking, endless loops end their round; merely idle, they keep
   expect(css).not.toContain('html[data-sight="idle"]');
   expect(css).not.toContain("html[data-sight] *");
 });
+
+test("software painting drops the conversation's per-frame paint effects", () => {
+  const css = readFileSync(path.join(import.meta.dir, "../src/desktop.css"), "utf8");
+  const rule = (selector: string) => {
+    const at = css.indexOf(`${selector} {`);
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("}", at));
+  };
+  expect(rule('html[data-desktop-renderer="cpu"] .channel__messages')).toContain("mask-image: none !important");
+  expect(rule('html[data-desktop-renderer="cpu"] .channel__messages .ac-msg')).toContain("box-shadow: none !important");
+  const cardShadows = 'html[data-desktop-renderer="cpu"] .rq *::after';
+  const cardShadowsAt = css.indexOf(`${cardShadows} {`);
+  expect(cardShadowsAt).toBeGreaterThan(-1);
+  expect(css.slice(cardShadowsAt, css.indexOf("}", cardShadowsAt))).toContain("box-shadow: none !important");
+  expect(css).toContain('html[data-desktop-renderer="cpu"] .rq *,');
+  expect(css).toContain('html[data-desktop-renderer="cpu"] .rq *::before,');
+});
+

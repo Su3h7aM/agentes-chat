@@ -42,6 +42,22 @@ html[data-sight="hidden"] *::after {
   /* biome-ignore lint/complexity/noImportantStyles: with nobody looking, no component's loop may keep going */
   animation-iteration-count: 1 !important;
 }
+/* Software painting pays for the list's mask on every frame, and a row's shadow repaints the whole list; the
+   conversation's own fade is not worth either while the person is reading through it. */
+html[data-desktop-renderer="cpu"] .channel__messages {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+html[data-desktop-renderer="cpu"] .channel__messages .ac-msg {
+  box-shadow: none !important;
+}
+/* A request card's wells and buttons repaint their shadows on every reveal: drop them with the row's. */
+html[data-desktop-renderer="cpu"] .rq *,
+html[data-desktop-renderer="cpu"] .rq *::before,
+html[data-desktop-renderer="cpu"] .rq *::after {
+  box-shadow: none !important;
+}
+
 /* Full screen: the buttons hide, so does their room. Windows and Linux keep the system's own title bar. */
 html[data-fullscreen],
 html[data-desktop="windows"],

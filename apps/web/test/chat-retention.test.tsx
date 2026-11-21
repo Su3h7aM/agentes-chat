@@ -195,6 +195,56 @@ describe("the older pages a channel keeps", () => {
     expect(log.scrollTop).toBe(580);
   }, 15_000);
 
+  test("a late shift between the gesture and its page does not move the row being read", async () => {
+    const desktop = window as typeof window & { __agentesDesktop?: unknown };
+    desktop.__agentesDesktop = { platform: "linux" };
+    const api = createFakeApi(withHistory());
+    const read = api.chat.messages.bind(api.chat);
+    let olderRequests = 0;
+    let release = () => {};
+    api.chat.messages = async (...args: Parameters<typeof read>) => {
+      if (args[2]?.before) {
+        olderRequests++;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return read(...args);
+    };
+    try {
+      await open(api);
+      const log = screen().getByRole("region", { name: "Mensagens" });
+      const arrived = () => Boolean(screen().queryByText("história 200"));
+      Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => (arrived() ? 4800 : 4000) });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
+      const row = screen().getByText("história 250").closest(".ac-msg") as HTMLElement;
+      let late = false;
+      log.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
+      row.getBoundingClientRect = () => {
+        const top = 1600 + (arrived() ? 500 : 0) + (late ? 211 : 0) - log.scrollTop;
+        return { top, bottom: top + 40 } as DOMRect;
+      };
+      log.scrollTop = 1600;
+      await act(async () => {
+        fireEvent.wheel(log, { deltaY: -40 });
+        log.scrollTop = 1500;
+        fireEvent.scroll(log);
+      });
+      expect(olderRequests).toBe(1);
+      // Draw-ahead finishes after the gesture: the delayed sample sees the row 211 lower.
+      late = true;
+      await act(async () => release());
+      await settle(3);
+      await admitOlder();
+      // The prepended page adds 500 above it: hold the row where the gesture left it.
+      expect(log.scrollTop).toBe(2211);
+      expect(row.getBoundingClientRect().top).toBe(100);
+    } finally {
+      cleanup();
+      delete desktop.__agentesDesktop;
+    }
+  }, 15_000);
+
   test("where the list holds its own place, rows near the screen are drawn as it scrolls", async () => {
     const nativeObserver = globalThis.ResizeObserver;
     const desktop = window as typeof window & { __agentesDesktop?: unknown };
@@ -208,9 +258,12 @@ describe("the older pages a channel keeps", () => {
       desktop.__agentesDesktop = { platform: "linux" };
       await open();
       const log = screen().getByRole("region", { name: "Mensagens" });
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 4000 });
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
       expect(drawn(log)).toBe(0);
       await act(async () => {
         fireEvent.wheel(log, { deltaY: -40 });
+        log.scrollTop = 600; // Past the 600px scroll throttle.
         fireEvent.scroll(log);
       });
       expect(drawn(log)).toBeGreaterThan(0);

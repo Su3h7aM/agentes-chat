@@ -586,7 +586,7 @@ const TRIM_SLACK = 50;
 /** Pinned this long, it lets go of what is far above (shorter in tests). */
 export const trimming = { afterMs: 10_000 };
 /** The rows drawn ahead of what is on screen where the browser's anchoring is not used (`drawAhead`), at least. */
-const DRAW_AHEAD = 1200;
+const DRAW_AHEAD = 800;
 /** Older pages a channel already loaded, and whether there are no more. */
 type OlderPages = { pages: MessageType[]; done: boolean };
 type OlderStatus = "idle" | "loading" | "staged" | "done";
@@ -1404,6 +1404,11 @@ function ChannelView({
   // out clears them, and they never show to whoever signs in next in the same tab.
   const olderKey = useMemo(() => keys.olderPages(org.id, channel.id), [org.id, channel.id]);
   const olderScope = `${org.id}:${channel.id}`;
+  // Handlers and in-flight callbacks read the current scope during render, before an effect can run.
+  const olderScopeRef = useRef(olderScope);
+  olderScopeRef.current = olderScope;
+  // The cleanup effect still resets once per scope change.
+  const olderResetScope = useRef(olderScope);
   const cachedOlder: OlderWindow = {
     scope: olderScope,
     pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [],
@@ -1435,7 +1440,6 @@ function ChannelView({
   const olderBusy = useRef(false);
   const olderRequest = useRef(0);
   const newerRequest = useRef(0);
-  const olderScopeRef = useRef(olderScope);
   // Going to a message far back shows the page around it on its own (`older`), apart from the latest page: newer
   // pages come as the person scrolls down, until they reach it.
   const [gap, setGap] = useState(false);
@@ -1534,8 +1538,8 @@ function ChannelView({
   // A response belongs to the channel that asked for it. A route that reuses this view must not let the old one land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the local writers would reset this once per render
   useEffect(() => {
-    if (olderScopeRef.current === olderScope) return;
-    olderScopeRef.current = olderScope;
+    if (olderResetScope.current === olderScope) return;
+    olderResetScope.current = olderScope;
     olderRequest.current += 1;
     newerRequest.current += 1;
     olderBusy.current = false;
@@ -1675,6 +1679,13 @@ function ChannelView({
   // Newest at the bottom: follow new messages and streaming text while the person is at the
   // bottom; if they scrolled up, the round button at the top right leads back instead of jumping.
   const scroller = useRef<HTMLElement>(null);
+  // Rows drawn ahead, shared by the scroll handler and the admission correction.
+  const drawnRows = useRef(new Set<Element>());
+  // The last position `drawAhead` ran at: its margin already covers the next few frames.
+  const lastDrawnTop = useRef(0);
+  // The row and top the last upward gesture showed, before late layout could move it.
+  const gestureAnchor = useRef<VisibleAnchor | null>(null);
+  const gestureAnchorAt = useRef(0);
   // The scroll position this code wrote: its scroll event is our adjustment, not the person's.
   const programmaticScroll = useRef<number | null>(null);
   const settleScroll = useRef<(() => void) | null>(null);
@@ -1736,6 +1747,8 @@ function ChannelView({
   const markGesture = () => {
     lastGesture.current = Date.now();
     programmaticScroll.current = null;
+    gestureAnchor.current = null;
+    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // The last gesture that can move the list up (wheel up, an up key, a finger, the scrollbar). Only a scroll up
@@ -1746,6 +1759,8 @@ function ChannelView({
     lastGesture.current = Date.now();
     lastUpGesture.current = lastGesture.current;
     programmaticScroll.current = null;
+    gestureAnchor.current = null;
+    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // The last wheel or finger: a window without focus is still being read while these come (a click doesn't count).
@@ -1753,6 +1768,8 @@ function ChannelView({
   const markScrollGesture = () => {
     lastScrollGesture.current = Date.now();
     programmaticScroll.current = null;
+    gestureAnchor.current = null;
+    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // Pinned to the end a while, the conversation keeps only its newest messages: the pages loaded above leave and the
@@ -1812,7 +1829,10 @@ function ChannelView({
       olderBusy.current = false;
       setStagedOlder((current) => (current?.request === staged.request ? null : current));
       const done = staged.page.length < staged.limit;
-      admissionAnchor.current = stick.current ? null : visibleAnchor(el);
+      const shown = gestureAnchor.current;
+      const fromGesture =
+        shown && Date.now() - gestureAnchorAt.current < GESTURE_MS && el.contains(shown.row) ? shown : null;
+      admissionAnchor.current = stick.current ? null : (fromGesture ?? visibleAnchor(el));
       setOlderWindow((prev) => {
         const known = new Set(prev.pages.map((m) => m.id));
         const added = staged.page.filter((m) => !known.has(m.id));
@@ -1859,6 +1879,12 @@ function ChannelView({
     const el = scroller.current;
     if (!el?.contains(anchor.row)) return;
     restoredAnchor.current = restoreAnchorPosition(el, anchor);
+    // The page just prepended: position the view first, then draw the rows around it and correct once more.
+    // Their first placeholder-to-real resize is otherwise seen only after a later scroll and moves the reader's row.
+    drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawnRows.current);
+    const drawn = restoreAnchorPosition(el, anchor);
+    if (drawn) restoredAnchor.current = drawn;
+    lastDrawnTop.current = el.scrollTop;
     programmaticScroll.current = el.scrollTop;
     settleScroll.current?.();
     settleScroll.current = settleAnchor(el, anchor, (top) => {
@@ -2034,8 +2060,24 @@ function ChannelView({
     };
     const heights = manualAnchor ? new WeakMap<Element, number>() : null;
     // Rows come into view already drawn, so they take their height while out of sight (`drawAhead`).
-    const drawn = new Set<Element>();
-    const drawNear = () => drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawn);
+    const drawn = drawnRows.current;
+    lastDrawnTop.current = el.scrollTop;
+    const drawNear = () => {
+      const top = el.scrollTop;
+      if (!stick.current && Date.now() - lastUpGesture.current < GESTURE_MS) {
+        const written = programmaticScroll.current;
+        if (written === null || Math.abs(top - written) > 1) {
+          const shown = visibleAnchor(el);
+          if (shown) {
+            gestureAnchor.current = shown;
+            gestureAnchorAt.current = Date.now();
+          }
+        }
+      }
+      if (Math.abs(top - lastDrawnTop.current) < 600) return;
+      lastDrawnTop.current = top;
+      drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawn);
+    };
     if (heights) el.addEventListener("scroll", drawNear, { passive: true });
     const hold = (entries: ResizeObserverEntry[]) => {
       if (!heights) return;

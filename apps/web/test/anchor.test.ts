@@ -43,5 +43,27 @@ describe("where a row stands in its list", () => {
     // On screen 40 px under the list's top edge, scrolled 900 down: 940 into its content.
     expect(topInList(list, box(140))).toBe(940);
   });
+
+  test("a late layout shift after the gesture corrects to the row's last seen top", () => {
+    let contentTop = 520; // The row sat 20 under the list's top after the gesture.
+    const list = {
+      scrollTop: 500,
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 0 }),
+    } as unknown as HTMLElement;
+    const row = {
+      getBoundingClientRect: () => ({ top: contentTop - list.scrollTop }),
+    } as unknown as Element;
+    const frames = frameQueue();
+    settleAnchor(list, { row, top: 20 }, (top) => (list.scrollTop = top), { frame: frames.frame });
+    // Draw-ahead grows a row above it during the quiet gap: the person still expects it 20 under the edge.
+    contentTop += 211;
+    frames.run();
+    expect(list.scrollTop).toBe(711);
+    expect(row.getBoundingClientRect().top - (list.getBoundingClientRect() as DOMRect).top).toBe(20);
+    frames.run();
+    frames.run();
+    expect(frames.pending()).toBe(0);
+  });
 });
 
