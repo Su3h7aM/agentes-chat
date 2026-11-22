@@ -57,7 +57,14 @@ html[data-desktop-renderer="cpu"] .rq *::before,
 html[data-desktop-renderer="cpu"] .rq *::after {
   box-shadow: none !important;
 }
-
+/* The work area sells itself to the compositor for future moves (layout.css `.shell__main`): painted in software,
+   that is a copy of the whole area on the CPU, on every frame of a scroll. `will-change: auto` drops the layer;
+   `contain: layout` keeps the containing block and stacking context the pages were laid out against (Drive's drop
+   zone, the wiki's floating bar). */
+html[data-desktop-renderer="cpu"] .shell__main {
+  will-change: auto;
+  contain: layout;
+}
 /* Full screen: the buttons hide, so does their room. Windows and Linux keep the system's own title bar. */
 html[data-fullscreen],
 html[data-desktop="windows"],
@@ -190,6 +197,6 @@ html[data-desktop] :is(button, [role="button"], [role="tab"], [role="menuitem"],
 /* The rows that drag to reorder stay out: `draggable` is only a style hint (-webkit-user-drag: element) that this
    rule would beat, and the web view would never start their drag. */
 html[data-desktop]
-:is(.sidebar img, .sidebar a:not([draggable="true"]), .titlebar, svg, button:not([draggable="true"])) {
+  :is(.sidebar img, .sidebar a:not([draggable="true"]), .titlebar, svg, button:not([draggable="true"])) {
   -webkit-user-drag: none;
 }

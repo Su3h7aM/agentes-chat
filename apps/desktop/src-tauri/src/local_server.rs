@@ -221,6 +221,89 @@ fn read_env(folder: &Folder) -> String {
     fs::read_to_string(folder.env()).unwrap_or_default()
 }
 
+/// The `.env` text as last read, with the file's size and modification time: status checks read
+/// the file on every call, while it changes rarely, so the cached text is reused while both match.
+#[derive(Clone, Debug, Default)]
+struct EnvCache {
+    path: PathBuf,
+    len: Option<u64>,
+    modified: Option<SystemTime>,
+    text: String,
+}
+
+/// The `.env` text for `path` through `cache`, re-read only when the file's size or modification
+/// time changed since the last read. Same content as a direct read for a changed file; purely an
+/// in-memory shortcut. The core takes the cache slot itself (no `AppHandle`), so tests cover the
+/// hit, the miss and the invalidation without a Tauri app; the `AppHandle` wrappers below lock
+/// the slot out of `Inner`.
+fn cached_text(cache: &mut Option<EnvCache>, path: &Path) -> String {
+    let (len, modified) = fs::metadata(path)
+        .ok()
+        .map(|m| (Some(m.len()), m.modified().ok()))
+        .unwrap_or((None, None));
+    if let Some(hit) = cache.as_ref() {
+        if hit.path == path && hit.len == len && hit.modified == modified {
+            return hit.text.clone();
+        }
+    }
+    let text = fs::read_to_string(path).unwrap_or_default();
+    *cache = Some(EnvCache { path: path.to_path_buf(), len, modified, text: text.clone() });
+    text
+}
+
+/// Stores `text` as the cached entry for `path`, with the file's metadata as written. Unconditional:
+/// a write that leaves the size and time unchanged still reads back the write.
+fn store_text(cache: &mut Option<EnvCache>, path: &Path, text: String) {
+    let (len, modified) = fs::metadata(path)
+        .ok()
+        .map(|m| (Some(m.len()), m.modified().ok()))
+        .unwrap_or((None, None));
+    *cache = Some(EnvCache { path: path.to_path_buf(), len, modified, text });
+}
+
+/// Drops the cached entry for `path`: a move or a write the cache didn't make. The next read goes
+/// back to the file, so a moved-in `.env` is never mistaken for the moved-away one.
+fn drop_text(cache: &mut Option<EnvCache>, path: &Path) {
+    if cache.as_ref().is_some_and(|hit| hit.path == path) {
+        *cache = None;
+    }
+}
+
+/// The `.env` text, re-read only when the file's size or modification time changed since the last
+/// read. Same content as `read_env` for a changed file; purely an in-memory shortcut.
+fn cached_env(app: &AppHandle, folder: &Folder) -> String {
+    cached_text(&mut state(app).env_cache, &folder.env())
+}
+
+/// Writes `.env` entries and refreshes the cache, so the next read sees the write even where the
+/// filesystem reports the same size and time for the replaced file.
+fn write_env_cached(app: &AppHandle, folder: &Folder, entries: &[(&str, String)]) -> io::Result<()> {
+    let next = env_set(&cached_env(app, folder), entries);
+    let result = write_private(&folder.env(), next.as_bytes(), true);
+    if result.is_ok() {
+        store_text(&mut state(app).env_cache, &folder.env(), next.clone());
+    } else {
+        // A failed write leaves no cache, so the next read goes back to the file.
+        drop_text(&mut state(app).env_cache, &folder.env());
+    }
+    result
+}
+
+/// Drops the cached `.env` text for `folder`: after a write that bypassed the cache (`prepare`,
+/// which has no `AppHandle`) or after its `.env` moved (`restore`, `erase`). The next read goes
+/// back to the file.
+fn invalidate_env_cache(app: &AppHandle, folder: &Folder) {
+    drop_text(&mut state(app).env_cache, &folder.env());
+}
+
+/// The port from already-read `.env` text, without touching the file again.
+fn port_in(text: &str) -> Option<u16> {
+    env_get(text, "PORT")?.parse().ok()
+}
+
+/// Writes `.env` entries straight to the file, without touching the cache: only for contexts with
+/// no `AppHandle` (`prepare`, tests). A caller with an `AppHandle` uses `write_env_cached`, or
+/// calls `invalidate_env_cache` right after, or the cache keeps serving the text from before.
 fn write_env(folder: &Folder, entries: &[(&str, String)]) -> io::Result<()> {
     let next = env_set(&read_env(folder), entries);
     write_private(&folder.env(), next.as_bytes(), true)
@@ -229,11 +312,6 @@ fn write_env(folder: &Folder, entries: &[(&str, String)]) -> io::Result<()> {
 const ENV_HEADER: &str = "# agentes.chat on this computer, run by the agentes.chat app. Help:\n\
 # https://agentes.chat/docs/run-on-your-computer. AGENTES_SECRET encrypts the keys stored in the database: it\n\
 # travels with the folder in a backup, and changing it makes them unreadable.\n";
-
-/// The port the server takes and the address it answers at.
-pub fn port_of(folder: &Folder) -> Option<u16> {
-    env_get(&read_env(folder), "PORT")?.parse().ok()
-}
 
 pub fn loopback_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
@@ -982,6 +1060,8 @@ struct Inner {
     nightly_tried: Option<String>,
     /// Where "Erase and start over" moved its folder.
     erased: Option<String>,
+    /// The `.env` text as last read through `cached_env`, with the size and time it was read at.
+    env_cache: Option<EnvCache>,
 }
 
 #[derive(Default)]
@@ -1049,12 +1129,17 @@ pub fn runs(app: &AppHandle) -> bool {
     here.run && folder(app).is_some_and(|f| installed(&f) == Installed::App)
 }
 
+/// The port from the folder's `.env`, through the cache: status checks call this on every poll.
+fn cached_port(app: &AppHandle, folder: &Folder) -> Option<u16> {
+    port_in(&cached_env(app, folder))
+}
+
 /// The server here's loopback address (where its host homes point, `host_sync.rs`), while the app runs it.
 pub fn loopback(app: &AppHandle) -> Option<String> {
     if !runs(app) {
         return None;
     }
-    port_of(&folder(app)?).map(loopback_url)
+    cached_port(app, &folder(app)?).map(loopback_url)
 }
 
 /// Its loopback address while its own child answers there: its host homes run only then (`Runners::rescan`),
@@ -1064,11 +1149,13 @@ pub fn answering_loopback(app: &AppHandle) -> Option<String> {
 }
 
 /// Its address for people: `PUBLIC_URL` (the Tailscale one with reach on), else the loopback one.
+/// Reads `.env` once through the cache instead of once per key.
 pub fn public_url(app: &AppHandle) -> Option<String> {
     let folder = folder(app)?;
-    env_get(&read_env(&folder), "PUBLIC_URL")
+    let env = cached_env(app, &folder);
+    env_get(&env, "PUBLIC_URL")
         .and_then(|u| crate::servers::origin_of(&u))
-        .or_else(|| port_of(&folder).map(loopback_url))
+        .or_else(|| port_in(&env).map(loopback_url))
 }
 
 /// Whether `origin` is the server here, at either of its addresses.
@@ -1238,7 +1325,8 @@ pub fn status(app: &AppHandle, welcome: bool) -> Status {
         )
     };
     let folder = folder(app);
-    let env = folder.as_ref().map(read_env).unwrap_or_default();
+    // The checks call this often; the cached text avoids re-reading the file while it is unchanged.
+    let env = folder.as_ref().map(|f| cached_env(app, f)).unwrap_or_default();
     let installed = folder.as_ref().map(installed).unwrap_or(Installed::None);
     let run = here.run && installed == Installed::App;
     let port = env_get(&env, "PORT").and_then(|p| p.parse::<u16>().ok());
@@ -1414,7 +1502,7 @@ fn set_update_from(app: &AppHandle, from: Option<String>) {
 /// The folder's port, or, when another program listens there now, the next free one (its address moves with
 /// it): the server never starts behind someone else's answers.
 fn port_here(app: &AppHandle, folder: &Folder) -> Result<u16, String> {
-    let port = port_of(folder).ok_or("no PORT in .env")?;
+    let port = cached_port(app, folder).ok_or("no PORT in .env")?;
     if port_free(port) {
         return Ok(port);
     }
@@ -1621,7 +1709,7 @@ fn move_port(app: &AppHandle, folder: &Folder, old: u16) -> Result<u16, String> 
     if !reach {
         entries.push(("PUBLIC_URL", loopback_url(port)));
     }
-    write_env(folder, &entries).map_err(|e| e.to_string())?;
+    write_env_cached(app, folder, &entries).map_err(|e| e.to_string())?;
     if reach {
         // Its share still leads to the old port: it goes now, and comes back on the new one once the server
         // answers there (`ensure_served`).
@@ -1647,7 +1735,7 @@ pub fn ensure_served(app: &AppHandle) {
         return;
     }
     let Some(folder) = folder(app) else { return };
-    let Some(port) = port_of(&folder) else { return };
+    let Some(port) = cached_port(app, &folder) else { return };
     // Nobody is there to allow HTTPS now: asked for it, it stops (reach turned on again asks the person).
     let asked = std::cell::Cell::new(false);
     let shared = crate::tailscale::serve(port, &mut |_| asked.set(true), &|| asked.get());
@@ -1923,7 +2011,7 @@ pub fn sign_in_window(app: &AppHandle, origin: &str) -> Result<(), String> {
         return Err("not running".into());
     }
     let folder = folder(app).ok_or("no folder")?;
-    let port = port_of(&folder).ok_or("no port")?;
+    let port = cached_port(app, &folder).ok_or("no port")?;
     let token = match owner_sign_in(&folder, port, None) {
         Ok(token) => token,
         Err((_, Some(code))) => {
@@ -2039,7 +2127,10 @@ fn install(app: &AppHandle, choice: &Choice) -> Result<(), String> {
     let bun = runner_binary().ok_or_else(|| fail("database", "the app's runner binary isn't there".into()))?;
     // A setup that never finished (a crash, a power cut) left its database: it goes first.
     discard_unowned(&folder);
+    // `prepare` writes without the cache (it has no `AppHandle`): drop the entry, so the reads
+    // below see the setup it just wrote.
     let first = prepare(&folder, choice.usage, free_port)
+        .map(|()| invalidate_env_cache(app, &folder))
         .and_then(|_| install_version(&folder, &bundle, &version))
         .map_err(|e| fail("database", format!("setting up {}: {e}", folder.0.display())))?;
     if first == Copied::First || !folder.db().is_dir() {
@@ -2134,7 +2225,7 @@ fn start_with_owner(
     step(app, "start", "done");
 
     step(app, "account", "active");
-    let port = port_of(folder).ok_or_else(|| fail("account", "no PORT in .env".into()))?;
+    let port = cached_port(app, folder).ok_or_else(|| fail("account", "no PORT in .env".into()))?;
     let who = choice.name.as_deref().zip(choice.email.as_deref());
     owner_sign_in(folder, port, who)
         .map_err(|(status, _)| fail("account", format!("the owner's account: the server answered {status}")))?;
@@ -2160,7 +2251,7 @@ fn reach_stage(app: &AppHandle, stage: &'static str, url: Option<&str>) {
 /// (`REACH_EVENT`), and Tailscale's page for allowing HTTPS as soon as it names it.
 fn reach_on(app: &AppHandle) -> Result<String, crate::tailscale::ServeError> {
     let folder = folder(app).ok_or(crate::tailscale::ServeError::Serve)?;
-    let port = port_of(&folder).ok_or(crate::tailscale::ServeError::Serve)?;
+    let port = cached_port(app, &folder).ok_or(crate::tailscale::ServeError::Serve)?;
     reach_stage(app, "sharing", None);
     let server = app.state::<LocalServer>();
     server.reach_stop.store(false, SeqCst);
@@ -2197,7 +2288,8 @@ fn reach_on(app: &AppHandle) -> Result<String, crate::tailscale::ServeError> {
 /// Its address moves from `old` to `new` (its settings, the app's list) and it starts again there. When it doesn't
 /// answer there, back to `old`, so the switch, the list and the window never point where it doesn't answer.
 fn move_address(app: &AppHandle, folder: &Folder, old: Option<&str>, new: &str) -> Result<(), ()> {
-    write_env(folder, &[("PUBLIC_URL", new.to_string())]).map_err(|_| ())?;
+    // The cached text is refreshed by the write, so the address reads above see the move at once.
+    write_env_cached(app, folder, &[("PUBLIC_URL", new.to_string())]).map_err(|_| ())?;
     if let Some(old) = old {
         crate::servers::replace(app, old, new);
     }
@@ -2205,7 +2297,7 @@ fn move_address(app: &AppHandle, folder: &Folder, old: Option<&str>, new: &str) 
         return Ok(());
     }
     if let Some(old) = old {
-        let _ = write_env(folder, &[("PUBLIC_URL", old.to_string())]);
+        let _ = write_env_cached(app, folder, &[("PUBLIC_URL", old.to_string())]);
         crate::servers::replace(app, new, old);
         if crate::servers::is_loopback(old) {
             crate::tailscale::unserve(new);
@@ -2218,7 +2310,7 @@ fn move_address(app: &AppHandle, folder: &Folder, old: Option<&str>, new: &str) 
 
 /// Its address back to this computer's loopback, and Tailscale stops sharing it; the server reads it at start.
 fn address_here(app: &AppHandle, folder: &Folder) -> Result<String, String> {
-    let port = port_of(folder).ok_or("no port")?;
+    let port = cached_port(app, folder).ok_or("no port")?;
     let local = loopback_url(port);
     if let Some(old) = public_url(app).filter(|o| *o != local) {
         crate::tailscale::unserve(&old);
@@ -2230,7 +2322,7 @@ fn address_here(app: &AppHandle, folder: &Folder) -> Result<String, String> {
         inner.tailnet_down = false;
     }
     let_sleep(app);
-    write_env(folder, &[("PUBLIC_URL", local.clone())]).map_err(|e| e.to_string())?;
+    write_env_cached(app, folder, &[("PUBLIC_URL", local.clone())]).map_err(|e| e.to_string())?;
     Ok(local)
 }
 
@@ -2293,27 +2385,52 @@ const KEEP_BACKUPS: usize = 2;
 /// The nightly backup's hour, local time.
 const NIGHTLY_HOUR: &str = "030000";
 
-/// Now on this computer's clock as `YYYY-MM-DD-HHMMSS` (backups' names), read from the system's time zone without
-/// starting a program (the nightly check asks every minute). None only when the clock can't be read; the nightly
-/// backup never runs without it.
+/// Now on this computer's clock as `YYYY-MM-DD-HHMMSS` (backups' names); None only when the clock can't be read,
+/// so the nightly backup never runs without it. On Unix, `localtime_r` reads the system's own timezone tables
+/// without forking a process every minute; it reads the same local timezone as `date` (`TZ`, else the system's
+/// `/etc/localtime` on macOS and Linux) and formats the same zero-padded fields. Windows uses `GetLocalTime`.
 fn local_stamp() -> Option<String> {
     #[cfg(unix)]
     let (year, month, day, hour, minute, second) = {
+        // SAFETY: `localtime_r` fills `broken` from `now`; both live on this stack frame for the call.
         let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as libc::time_t;
-        // SAFETY: `localtime_r` fills `tm` from `now`; both live on this stack frame for the call.
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        let mut broken: libc::tm = unsafe { std::mem::zeroed() };
+        if unsafe { libc::localtime_r(&now, &mut broken) }.is_null() {
             return None;
         }
-        (tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
+        (
+            broken.tm_year + 1900,
+            broken.tm_mon + 1,
+            broken.tm_mday,
+            broken.tm_hour,
+            broken.tm_min,
+            broken.tm_sec,
+        )
     };
     #[cfg(windows)]
     let (year, month, day, hour, minute, second) = {
         // SAFETY: `GetLocalTime` takes nothing and returns the local time by value.
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        (t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
+        (
+            i32::from(t.wYear),
+            i32::from(t.wMonth),
+            i32::from(t.wDay),
+            i32::from(t.wHour),
+            i32::from(t.wMinute),
+            i32::from(t.wSecond),
+        )
     };
-    Some(format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}"))
+    #[cfg(not(any(unix, windows)))]
+    return None;
+    format_stamp(year, month, day, hour, minute, second)
+}
+
+/// A broken-down local time as `YYYY-MM-DD-HHMMSS`, the shape `date +%Y-%m-%d-%H%M%S` prints: each
+/// field zero-padded, `%S` reaching `60` on a leap second just as `tm_sec` does. None unless the
+/// text is 17 bytes, the same gate the `date` fork's output passed through.
+fn format_stamp(year: i32, mon: i32, mday: i32, hour: i32, min: i32, sec: i32) -> Option<String> {
+    let stamp = format!("{year:04}-{mon:02}-{mday:02}-{hour:02}{min:02}{sec:02}");
+    (stamp.len() == 17).then_some(stamp)
 }
 
 /// The backups `backup` wrote in `dir` (`agentes-*.tar.gz`), newest first. Only those: the "Copy to" folder is the
@@ -2409,7 +2526,7 @@ fn restore(app: &AppHandle, file: &str) -> Result<(), String> {
         let _ = fs::remove_dir_all(&unpacked);
         return Err("unreadable".into());
     }
-    let env_now = read_env(&folder);
+    let env_now = cached_env(app, &folder);
     let kept: Vec<(&str, String)> =
         ["PORT", "PUBLIC_URL"].into_iter().filter_map(|k| env_get(&env_now, k).map(|v| (k, v))).collect();
     let aside = folder.backups().join(format!("before-restore-{at}"));
@@ -2419,10 +2536,15 @@ fn restore(app: &AppHandle, file: &str) -> Result<(), String> {
         spawn(app, Phase::Starting).is_ok() && wait_running(app) == Phase::Running
     };
     stop(app, false);
+    // The moves swap `.env` itself: drop the entry read above, so the write below bases on the
+    // backup's `.env` just moved in, never on the moved-away one with the same size and time.
     let swapped = make_private_dir(&aside)
         .and_then(|()| move_parts(&folder.0, &aside))
         .and_then(|()| move_parts(&unpacked, &folder.0))
-        .and_then(|()| write_env(&folder, &kept));
+        .and_then(|()| {
+            invalidate_env_cache(app, &folder);
+            write_env_cached(app, &folder, &kept)
+        });
     if swapped.is_ok() && started(app) {
         let _ = fs::remove_dir_all(&unpacked);
         return Ok(());
@@ -2431,6 +2553,9 @@ fn restore(app: &AppHandle, file: &str) -> Result<(), String> {
     stop(app, false);
     let failed = folder.backups().join(format!("failed-restore-{at}"));
     let back = make_private_dir(&failed).and_then(|()| put_back(&folder.0, &aside, &failed, &had));
+    // Whatever `.env` is there now moved back; the entry (the backup's, or none after a failed
+    // write) must not survive it.
+    invalidate_env_cache(app, &folder);
     let _ = fs::remove_dir_all(&unpacked);
     if back.is_err() {
         note(app, format!("restore: putting it back failed, the old data is in {}", aside.display()));
@@ -2575,7 +2700,10 @@ impl Drop for Erasing<'_> {
 
 /// The server here's addresses in the list: its public one and its loopback one (read from its folder's `.env`).
 fn addresses(app: &AppHandle) -> Vec<String> {
-    let mut all: Vec<String> = public_url(app).into_iter().chain(folder(app).and_then(|f| port_of(&f)).map(loopback_url)).collect();
+    let mut all: Vec<String> = public_url(app)
+        .into_iter()
+        .chain(folder(app).and_then(|f| cached_port(app, &f)).map(loopback_url))
+        .collect();
     all.dedup();
     all
 }
@@ -2618,7 +2746,7 @@ fn erase(app: &AppHandle) -> Result<String, String> {
     }
     // Read while the folder is there: they live in its `.env`.
     let addresses = addresses(app);
-    let local = port_of(&folder).map(loopback_url);
+    let local = cached_port(app, &folder).map(loopback_url);
     let result = erase_in_order(
         // Not forgotten yet: until the folder moved, it is still the server here that stopped.
         || {
@@ -2667,6 +2795,9 @@ fn erase(app: &AppHandle) -> Result<String, String> {
     );
     match result {
         Ok(to) => {
+            // Its folder moved away whole: the cached `.env` text moved with it and must not serve
+            // a setup that later reuses the path.
+            invalidate_env_cache(app, &folder);
             let to = to.to_string_lossy().into_owned();
             state(app).erased = Some(to.clone());
             emit_status(app);
@@ -2889,7 +3020,7 @@ pub async fn local_server_reach(app: AppHandle, webview: tauri::Webview, on: boo
         };
         if was_here {
             let folder = folder(&app).ok_or("no folder")?;
-            let port = port_of(&folder).ok_or("no port")?;
+            let port = cached_port(&app, &folder).ok_or("no port")?;
             reach_stage(&app, "signingIn", None);
             follow_window(&app, &folder, port, &url, was)?;
         }
@@ -2915,7 +3046,7 @@ pub async fn local_server_usage(app: AppHandle, webview: tauri::Webview, on: boo
         let server = app.state::<LocalServer>();
         let _busy = server.busy.lock().unwrap_or_else(|e| e.into_inner());
         let folder = folder(&app).ok_or("no folder")?;
-        write_env(&folder, &[("TELEMETRY", if on { "on" } else { "off" }.to_string())]).map_err(|e| e.to_string())?;
+        write_env_cached(&app, &folder, &[("TELEMETRY", if on { "on" } else { "off" }.to_string())]).map_err(|e| e.to_string())?;
         let running = state(&app).pid.is_some();
         let result = if running { restart(&app) } else { Ok(()) };
         emit_status(&app);
@@ -3712,5 +3843,84 @@ mod tests {
         assert_eq!(*done.lock().unwrap(), Some(Some(0)));
         assert!(!folder.ready().exists());
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_stamp_is_pinned_byte_for_byte() {
+        // What `date +%Y-%m-%d-%H%M%S` prints for the same broken-down time: zero-padded fields,
+        // `%S` reaching `60` on a leap second just as `tm_sec` does.
+        assert_eq!(format_stamp(2026, 11, 14, 3, 4, 5).as_deref(), Some("2026-11-14-030405"));
+        assert_eq!(format_stamp(1970, 1, 1, 0, 0, 0).as_deref(), Some("1970-01-01-000000"));
+        assert_eq!(format_stamp(2009, 2, 13, 23, 31, 30).as_deref(), Some("2009-02-13-233130"));
+        assert_eq!(format_stamp(2026, 12, 31, 23, 59, 60).as_deref(), Some("2026-12-31-235960"));
+        // The same gate the `date` fork's output passed through: only a 17-byte text counts.
+        assert_eq!(format_stamp(10000, 1, 1, 0, 0, 0), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stamp_reads_the_same_clock_as_date() {
+        // Both read the process's local timezone (`tzset`: `TZ`, else `/etc/localtime`), so under
+        // `TZ=UTC` a known epoch prints its UTC stamp, exactly as `date` would with the same `TZ`.
+        let before = std::env::var("TZ").ok();
+        // glibc caches the timezone until `tzset`; changing `TZ` alone leaves `localtime_r` on the old one.
+        unsafe extern "C" {
+            fn tzset();
+        }
+        std::env::set_var("TZ", "UTC");
+        unsafe { tzset() };
+        let at = |secs: libc::time_t| {
+            let mut broken: libc::tm = unsafe { std::mem::zeroed() };
+            assert!(!unsafe { libc::localtime_r(&secs, &mut broken) }.is_null());
+            format_stamp(broken.tm_year + 1900, broken.tm_mon + 1, broken.tm_mday, broken.tm_hour, broken.tm_min, broken.tm_sec)
+        };
+        assert_eq!(at(0).as_deref(), Some("1970-01-01-000000"));
+        assert_eq!(at(1_234_567_890).as_deref(), Some("2009-02-13-233130"));
+        match before {
+            Some(tz) => std::env::set_var("TZ", tz),
+            None => std::env::remove_var("TZ"),
+        }
+        unsafe { tzset() };
+        // And now: the live stamp keeps the shape the nightly thread files backups under.
+        if let Some(now) = local_stamp() {
+            assert_eq!(now.len(), 17);
+            assert!(now.as_bytes().iter().enumerate().all(|(i, b)| match i {
+                4 | 7 => *b == b'-',
+                10 => *b == b'-',
+                _ => b.is_ascii_digit(),
+            }), "{now}");
+        }
+    }
+
+    #[test]
+    fn env_cache_hit_miss_write_and_move() {
+        // The cache core without a Tauri app: hit while size and time match, miss on a changed
+        // file, refresh on a write that leaves both unchanged, and nothing stale across a move.
+        let dir = temp("env-cache");
+        let env = dir.join(".env");
+        let mut cache: Option<EnvCache> = None;
+        // Nothing there yet: empty, and cached.
+        assert_eq!(cached_text(&mut cache, &env), "");
+        assert!(cache.is_some());
+        fs::write(&env, "PORT=4310\n").unwrap();
+        // Changed length: a miss, the new text.
+        assert_eq!(cached_text(&mut cache, &env), "PORT=4310\n");
+        // Unchanged: a hit, the same text without going back to the file.
+        assert_eq!(cached_text(&mut cache, &env), "PORT=4310\n");
+        // A write the metadata can't tell apart (same size, same second): the store is
+        // unconditional, so the write still reads back. The file still holds the old bytes here,
+        // standing in for a filesystem that reports the replaced file as unchanged.
+        store_text(&mut cache, &env, "PORT=4311\n".to_string());
+        assert_eq!(cached_text(&mut cache, &env), "PORT=4311\n");
+        // A move (`restore`, `erase`): the entry goes, the next read is the file now there.
+        let moved = dir.join(".env.moved");
+        fs::rename(&env, &moved).unwrap();
+        fs::write(&env, "PORT=4320\n").unwrap();
+        drop_text(&mut cache, &env);
+        assert_eq!(cached_text(&mut cache, &env), "PORT=4320\n");
+        // Dropping another path leaves this one alone.
+        drop_text(&mut cache, &moved);
+        assert_eq!(cached_text(&mut cache, &env), "PORT=4320\n");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

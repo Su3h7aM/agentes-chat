@@ -11,6 +11,10 @@ use tauri::AppHandle;
 
 const TRAY_ID: &str = "main";
 
+#[cfg(target_os = "linux")]
+static STATUS_NOTIFIER_HOST_REGISTERED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(target_os = "macos")]
 mod icons {
     pub const IDLE: &[u8] = include_bytes!("../icons/tray/idle.png");
@@ -93,7 +97,60 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     if let Err(err) = builder.build(app) {
         eprintln!("agentes.chat: no tray icon: {err}");
     }
+    #[cfg(target_os = "linux")]
+    watch_status_notifier_host();
     Ok(())
+}
+
+/// Session-bus work stays asynchronous so a missing or slow tray host cannot stall GTK window handling.
+#[cfg(target_os = "linux")]
+fn watch_status_notifier_host() {
+    use webkit2gtk::gio;
+
+    gio::bus_get(gio::BusType::Session, None::<&gio::Cancellable>, |result| {
+        let Ok(bus) = result else { return };
+
+        let host = "org.kde.StatusNotifierWatcher";
+        for (signal, registered) in [
+            ("StatusNotifierHostRegistered", true),
+            ("StatusNotifierHostUnregistered", false),
+        ] {
+            bus.signal_subscribe(
+                Some(host),
+                Some(host),
+                Some(signal),
+                Some("/StatusNotifierWatcher"),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |_, _, _, _, _, _| {
+                    STATUS_NOTIFIER_HOST_REGISTERED
+                        .store(registered, std::sync::atomic::Ordering::Relaxed);
+                },
+            );
+        }
+
+        let args = webkit2gtk::glib::Variant::from((host, "IsStatusNotifierHostRegistered"));
+        bus.call(
+            Some(host),
+            "/StatusNotifierWatcher",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&args),
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            500,
+            None::<&gio::Cancellable>,
+            |result| {
+                let registered = result
+                    .ok()
+                    .and_then(|reply| reply.child_value(0).as_variant())
+                    .and_then(|value| value.get::<bool>())
+                    .unwrap_or(false);
+                STATUS_NOTIFIER_HOST_REGISTERED
+                    .store(registered, std::sync::atomic::Ordering::Relaxed);
+            },
+        );
+    });
 }
 
 /// Windows and Linux: the app icon the person picked (app_icon.rs), which the tray shows like the windows. Without a
@@ -260,25 +317,43 @@ pub fn shown(app: &AppHandle) -> bool {
     if app.tray_by_id(TRAY_ID).is_none() {
         return false;
     }
+    STATUS_NOTIFIER_HOST_REGISTERED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Startup has no window to stall, so preserve the bounded host check that decides whether login starts hidden.
+/// Later window events use `shown()` and the async watcher, avoiding a session-bus wait on GTK's thread.
+#[cfg(target_os = "linux")]
+pub fn shown_at_startup(app: &AppHandle) -> bool {
+    if app.tray_by_id(TRAY_ID).is_none() {
+        STATUS_NOTIFIER_HOST_REGISTERED.store(false, std::sync::atomic::Ordering::Relaxed);
+        return false;
+    }
+
     use webkit2gtk::gio;
     use webkit2gtk::glib::Variant;
-    let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>) else { return false };
-    let args = Variant::from(("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered"));
-    bus.call_sync(
-        Some("org.kde.StatusNotifierWatcher"),
-        "/StatusNotifierWatcher",
-        "org.freedesktop.DBus.Properties",
-        "Get",
-        Some(&args),
-        None,
-        gio::DBusCallFlags::NO_AUTO_START,
-        500,
-        None::<&gio::Cancellable>,
-    )
-    .ok()
-    .and_then(|reply| reply.child_value(0).as_variant())
-    .and_then(|value| value.get::<bool>())
-    .unwrap_or(false)
+
+    let registered = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>)
+        .ok()
+        .and_then(|bus| {
+            let args = Variant::from(("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered"));
+            bus.call_sync(
+                Some("org.kde.StatusNotifierWatcher"),
+                "/StatusNotifierWatcher",
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                Some(&args),
+                None,
+                gio::DBusCallFlags::NO_AUTO_START,
+                500,
+                None::<&gio::Cancellable>,
+            )
+            .ok()
+        })
+        .and_then(|reply| reply.child_value(0).as_variant())
+        .and_then(|value| value.get::<bool>())
+        .unwrap_or(false);
+    STATUS_NOTIFIER_HOST_REGISTERED.store(registered, std::sync::atomic::Ordering::Relaxed);
+    registered
 }
 
 /// On a Mac, whether the menu bar icon shows (the popover decides: agents here, or the person's choice).

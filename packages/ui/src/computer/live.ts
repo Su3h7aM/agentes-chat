@@ -1,10 +1,12 @@
 /**
  * Living computers: one shared loop draws every computer portrait on screen
  * from the portrait engine (portrait.js), about 11 times a second. Only
- * visible portraits are drawn; with reduced motion each one is drawn once,
- * still (and again when its kind or state changes).
+ * visible portraits are drawn; with reduced motion, or in a window painted in
+ * software (`liveDrawingHeld`), each one is drawn once, still (and again when
+ * its kind or state changes).
  */
 
+import { liveDrawingHeld } from "../live-drawing";
 import { onThemeChange } from "../theme";
 import { COMPUTER_ART, type ComputerState, drawComputer, type PortraitKind } from "./portrait.js";
 
@@ -20,8 +22,10 @@ let timer: ReturnType<typeof setTimeout> | 0 = 0;
 let observer: IntersectionObserver | null = null;
 let themeWatched = false;
 
+/** Still: the person asked for reduced motion, or the app's window paints in software (`liveDrawingHeld`). */
 const reduced = () =>
-  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  liveDrawingHeld() ||
+  (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches === true);
 const now = () => (typeof performance === "object" ? performance.now() : Date.now()) / 1000;
 const isDark = (el: Element) => el.closest("[data-theme]")?.getAttribute("data-theme") === "dark";
 

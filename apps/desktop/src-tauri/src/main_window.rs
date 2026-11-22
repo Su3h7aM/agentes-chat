@@ -13,6 +13,7 @@ use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+#[cfg(target_os = "macos")]
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
 use tauri::window::Color;
@@ -239,9 +240,6 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
         // Tauri's own drop handling would take every drag first and the page would get nothing.
         .disable_drag_drop_handler()
         .background_color(backdrop(theme))
-        // Hidden, the page keeps running (macOS 14+), as Slack's: conversations stay live, the Dock badge
-        // stays right, and coming back finds it as it was.
-        .background_throttling(BackgroundThrottlingPolicy::Disabled)
         // The window's name is the page's ("#loja · Acme"): the Window menu, Mission Control, VoiceOver.
         .on_document_title_changed(move |_, title| {
             if let Some(window) = on_title.get_window(LABEL) {
@@ -323,6 +321,9 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
             }
             _ => true,
         });
+    // macOS suspends hidden web views, so the site needs to stay live for conversations and the Dock badge.
+    #[cfg(target_os = "macos")]
+    let builder = builder.background_throttling(BackgroundThrottlingPolicy::Disabled);
     let builder = match (saved.x, saved.y, crate::graphics::native_wayland()) {
         (Some(x), Some(y), false) => builder.position(x, y),
         _ => builder.center(),

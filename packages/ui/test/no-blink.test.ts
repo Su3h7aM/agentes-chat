@@ -5,6 +5,7 @@ setupDom();
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { addLiveAgent } from "../src/agent/live";
 import { addLiveBrain } from "../src/brain/live";
 import { addLiveComputer } from "../src/computer/live";
 import { switchTheme, THEME_SWITCHING_ATTR } from "../src/theme";
@@ -85,6 +86,31 @@ describe("switching the theme", () => {
     expect(draws.brain).toBeGreaterThan(before.brain);
     stopComputer();
     stopBrain();
+  });
+});
+
+describe("a window painted in software", () => {
+  test("holds the live drawings: no frame is asked for", () => {
+    const root = document.documentElement;
+    const real = globalThis.requestAnimationFrame;
+    let frames = 0;
+    root.dataset.desktopRenderer = "cpu";
+    // The loop starts by asking for a frame; the stub counts the asks and schedules nothing.
+    globalThis.requestAnimationFrame = (() => {
+      frames++;
+      return 0;
+    }) as typeof requestAnimationFrame;
+    try {
+      const canvas = document.createElement("canvas");
+      const box = document.createElement("div");
+      document.body.append(box, canvas);
+      const stop = addLiveAgent({ canvas, box, look: () => ({ state: "idle", seed: 1 }) });
+      expect(frames).toBe(0);
+      stop();
+    } finally {
+      globalThis.requestAnimationFrame = real;
+      delete root.dataset.desktopRenderer;
+    }
   });
 });
 

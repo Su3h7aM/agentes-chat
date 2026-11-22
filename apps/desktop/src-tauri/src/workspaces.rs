@@ -10,8 +10,8 @@
 //! and server. An account the window isn't on tells its new notifications the same way.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
-use std::sync::{mpsc, Mutex};
+use std::io::{BufReader, Read};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -42,8 +42,8 @@ const BODY_MAX: u64 = 2 * 1024 * 1024;
 pub struct Org {
     pub id: String,
     pub name: String,
-    /// A data URL; None shows the workspace's mark.
-    pub logo: Option<String>,
+    /// A data URL; None shows the workspace's mark. Shared across ticks, so a poll never copies it.
+    pub logo: Option<Arc<str>>,
     pub unread: u64,
     pub waiting: u64,
     /// The person may pair a computer with it (`pair_computers`): Preferences and the sign-in's card offer this one.
@@ -86,10 +86,10 @@ pub struct Workspaces(Mutex<State>);
 
 #[derive(Default)]
 struct State {
-    /// The last answer of each server, in the list's order.
+    /// The last answer of each server, in the list's order. Logos stay shared, so cloning stays cheap.
     list: Vec<ServerWorkspaces>,
-    /// Logos already read, by their address (None: none to show).
-    logos: HashMap<String, Option<String>>,
+    /// Logos already read, by their address (None: none to show). Shared, so a tick never copies them.
+    logos: HashMap<String, Option<Arc<str>>>,
     /// When each server was last asked, answered or not.
     asked: HashMap<String, Instant>,
     /// Servers open in the window since their last answer: what came meanwhile was the page's to tell.
@@ -198,9 +198,9 @@ fn refresh(app: &AppHandle, all: bool) {
         .get_window(main_window::LABEL)
         .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false));
     let file = servers::get(app);
-    let (mut logos, asked, open_since) = {
+    let (asked, open_since) = {
         let state = lock(app);
-        (state.logos.clone(), state.asked.clone(), state.open_since.clone())
+        (state.asked.clone(), state.open_since.clone())
     };
     let asking: Vec<&String> = file
         .servers
@@ -213,30 +213,52 @@ fn refresh(app: &AppHandle, all: bool) {
     let agent = ureq::AgentBuilder::new().timeout(TIMEOUT).redirects(0).build();
     let home = app.path().home_dir().ok();
     let before = list(app);
-    let mut next = Vec::with_capacity(file.servers.len());
+    // The last answers stay shared (their logos are reference-counted), so comparing never copies image bytes.
+    let logos = std::sync::Mutex::new(lock(app).logos.clone());
     // Read once for every server, and never with Tauri's own read (cookies.rs: it stops the app on macOS).
     let window_cookies = crate::cookies::read(&page);
-    for server in &file.servers {
-        let old = before.iter().find(|s| &s.server == server);
-        if !asking.contains(&server) {
-            next.extend(old.cloned());
-            continue;
-        }
-        let Ok(url) = server.parse::<Url>() else { continue };
-        let cookie = cookie_header(window_cookies.iter().filter(|c| sent_to(*c, &url)).map(|c| (c.name(), c.value())));
-        let here = crate::local_server::is_here(app, server);
-        let agents_here = main_window::agents_here(server, here)
-            && home.as_ref().is_some_and(|h| !crate::discover::served_here(h, server));
-        match ask(&agent, server, &cookie, &mut logos) {
-            Some(answer) => next.push(ServerWorkspaces { here, agents_here, ..answer }),
+    let jobs: Vec<(usize, String, String, bool, bool)> = file
+        .servers
+        .iter()
+        .enumerate()
+        .filter(|(_, server)| asking.contains(server))
+        .filter_map(|(index, server)| {
+            let url = server.parse::<Url>().ok()?;
+            let cookie = cookie_header(window_cookies.iter().filter(|c| sent_to(*c, &url)).map(|c| (c.name(), c.value())));
+            let here = crate::local_server::is_here(app, server);
+            let agents_here = main_window::agents_here(server, here)
+                && home.as_ref().is_some_and(|h| !crate::discover::served_here(h, server));
+            Some((index, server.clone(), cookie, here, agents_here))
+        })
+        .collect();
+    // One slow server must not hold back the others: each is asked on its own thread, sharing the
+    // one agent (its connection pool is shared by clones) and the logo cache.
+    let answers: Vec<Option<ServerWorkspaces>> = std::thread::scope(|s| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|(_, server, cookie, _, _)| s.spawn(|| ask(&agent, server, cookie, &logos)))
+            .collect();
+        handles.into_iter().map(join_ask).collect()
+    });
+    let mut slots: Vec<Option<ServerWorkspaces>> = file
+        .servers
+        .iter()
+        .map(|server| before.iter().find(|old| &old.server == server).cloned())
+        .collect();
+    for ((index, _, _, here, agents_here), answer) in jobs.iter().zip(answers) {
+        match answer {
+            Some(answer) => slots[*index] = Some(ServerWorkspaces { here: *here, agents_here: *agents_here, ..answer }),
             // Not reached (offline, an error): what it said last stays, marked since when.
             None => {
-                if let Some(old) = old {
-                    next.push(ServerWorkspaces { here, agents_here, ..unreachable(old, now_ms()) });
+                if let Some(old) = slots[*index].as_ref() {
+                    let offline = unreachable(old, now_ms());
+                    slots[*index] = Some(offline);
                 }
             }
         }
     }
+    let next: Vec<ServerWorkspaces> = slots.into_iter().flatten().collect();
+    let logos = logos.into_inner().unwrap_or_else(|e| e.into_inner());
     let changed = next != before;
     // With no page, nothing is told.
     let quiet: Vec<&str> = match open.as_deref() {
@@ -270,6 +292,19 @@ fn refresh(app: &AppHandle, all: bool) {
     }
 }
 
+/// One ask thread's answer: a panicked `ask` reads as unreachable (its last answer stays), never
+/// as a refresh that died halfway. A panic is a bug, so it is said out loud like the other
+/// failures this file's threads report.
+fn join_ask(handle: std::thread::ScopedJoinHandle<'_, Option<ServerWorkspaces>>) -> Option<ServerWorkspaces> {
+    match handle.join() {
+        Ok(answer) => answer,
+        Err(_) => {
+            eprintln!("agentes.chat: a workspace check panicked; keeping its last answer");
+            None
+        }
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -280,7 +315,12 @@ pub fn unreachable(last: &ServerWorkspaces, now: u64) -> ServerWorkspaces {
 }
 
 /// One server: signed out (no session, or it refused it) lists nothing; None when it couldn't be reached.
-fn ask(agent: &ureq::Agent, server: &str, cookie: &str, logos: &mut HashMap<String, Option<String>>) -> Option<ServerWorkspaces> {
+fn ask(
+    agent: &ureq::Agent,
+    server: &str,
+    cookie: &str,
+    logos: &Mutex<HashMap<String, Option<Arc<str>>>>,
+) -> Option<ServerWorkspaces> {
     let signed_out = ServerWorkspaces { server: server.to_string(), signed_in: false, ..Default::default() };
     if cookie.is_empty() {
         return Some(signed_out);
@@ -312,7 +352,7 @@ fn with_logos(
     agent: &ureq::Agent,
     server: &str,
     cookie: &str,
-    logos: &mut HashMap<String, Option<String>>,
+    logos: &Mutex<HashMap<String, Option<Arc<str>>>>,
     parsed: Vec<(String, String, Option<String>, bool)>,
     counts: &HashMap<String, (u64, u64)>,
 ) -> Vec<Org> {
@@ -365,34 +405,35 @@ pub fn window_user(app: &AppHandle, server: &str) -> Option<String> {
     me.pointer("/user/id").and_then(Value::as_str).map(str::to_string)
 }
 
-/// The answer as JSON; Ok(None) when the session isn't (any longer) signed in there.
+/// The answer as JSON; Ok(None) when the session isn't (any longer) signed in there. Parsed in one
+/// pass straight from the capped body, without buffering the whole text first and parsing it again.
 fn get_json(agent: &ureq::Agent, url: &str, cookie: &str) -> Result<Option<Value>, ()> {
     match agent.get(url).set("Cookie", cookie).set("X-Agentes-Client", "mobile").set("Accept", "application/json").call() {
         Ok(response) => {
-            let mut text = String::new();
-            response.into_reader().take(BODY_MAX).read_to_string(&mut text).map_err(|_| ())?;
-            serde_json::from_str(&text).map(Some).map_err(|_| ())
+            let reader = BufReader::new(response.into_reader().take(BODY_MAX));
+            serde_json::from_reader(reader).map(Some).map_err(|_| ())
         }
         Err(ureq::Error::Status(401 | 403, _)) => Ok(None),
         Err(_) => Err(()),
     }
 }
 
-/// A workspace's logo from its own server, as a data URL, read once per address.
+/// A workspace's logo from its own server, as a data URL, read once per address. The cache lock is
+/// only held to check and store; the image itself is fetched without holding it, so servers don't wait.
 fn logo_data(
     agent: &ureq::Agent,
     server: &str,
     path: &str,
     cookie: &str,
-    logos: &mut HashMap<String, Option<String>>,
-) -> Option<String> {
+    logos: &Mutex<HashMap<String, Option<Arc<str>>>>,
+) -> Option<Arc<str>> {
     let base: Url = server.parse().ok()?;
     let url = base.join(path).ok()?;
     // Only from that server: a logo address never sends its cookies anywhere else.
     if url.origin() != base.origin() {
         return None;
     }
-    if let Some(known) = logos.get(url.as_str()) {
+    if let Some(known) = logos.lock().unwrap_or_else(|e| e.into_inner()).get(url.as_str()) {
         return known.clone();
     }
     let read = || -> Option<String> {
@@ -408,8 +449,8 @@ fn logo_data(
         }
         Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
     };
-    let logo = read();
-    logos.insert(url.to_string(), logo.clone());
+    let logo: Option<Arc<str>> = read().map(Arc::from);
+    logos.lock().unwrap_or_else(|e| e.into_inner()).insert(url.to_string(), logo.clone());
     logo
 }
 
@@ -992,5 +1033,93 @@ mod tests {
             Some(("Oficina · O agentes.chat neste Mac".into(), "1 notificação nova".into()))
         );
         assert_eq!(notice_text(&HashMap::new(), servers::CLOUD, false, "Acme", 1), None, "before the labels arrived");
+    }
+
+    #[test]
+    fn a_panicked_check_keeps_the_last_answer() {
+        // The refresh's join seam: a panic in one `ask` reads as unreachable, never as a dead refresh.
+        let answer: Option<ServerWorkspaces> = std::thread::scope(|s| {
+            let faded = s.spawn(|| Some(server("https://a.exemplo.com.br", true, vec![])));
+            assert_eq!(join_ask(faded).as_ref().map(|s| s.server.as_str()), Some("https://a.exemplo.com.br"));
+            join_ask(s.spawn(|| -> Option<ServerWorkspaces> { panic!("ask blew up") }))
+        });
+        assert_eq!(answer, None);
+    }
+
+    /// One mock server answering the three reads of the minute's check (`me`, `unread`,
+    /// `device-accounts`); `slow_ms` delays the first answer. Returns its address and the thread.
+    fn mock_server(slow_ms: u64, org: &str) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let me = format!(
+            "{{\"user\":{{\"id\":\"u-1\"}},\"organizations\":[{{\"id\":\"o-1\",\"name\":\"{org}\",\"logo\":null,\"permissions\":[]}}]}}"
+        );
+        let unread = "{\"organizations\":[{\"orgId\":\"o-1\",\"unread\":2,\"waiting\":1}]}";
+        let accounts = "{}";
+        let handle = std::thread::spawn(move || {
+            // Three requests per check: no logo to fetch (`logo: null`).
+            for _ in 0..3 {
+                let Ok((mut s, _)) = listener.accept() else { return };
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while head.len() < 4096 {
+                    if std::io::Read::read(&mut s, &mut byte).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    head.push(byte[0]);
+                    if head.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let line = String::from_utf8_lossy(&head);
+                let body = if line.contains("/api/app/me/unread") {
+                    unread
+                } else if line.contains("/api/app/device-accounts") {
+                    accounts
+                } else {
+                    if slow_ms > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(slow_ms));
+                    }
+                    me.as_str()
+                };
+                let _ = std::io::Write::write_all(
+                    &mut s,
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (addr, handle)
+    }
+
+    #[test]
+    fn every_server_is_asked_on_its_own_thread() {
+        // The refresh's seam: each server asked on its own scoped thread, sharing the one agent
+        // and the logo cache, answers joined back in order. The slow one must not turn the fast
+        // one into an unreachable.
+        let (slow, slow_thread) = mock_server(400, "Slow");
+        let (fast, fast_thread) = mock_server(0, "Fast");
+        let agent = ureq::AgentBuilder::new().timeout(TIMEOUT).redirects(0).build();
+        let logos = Mutex::new(HashMap::new());
+        let jobs = [(slow.clone(), "s-cookie"), (fast.clone(), "f-cookie")];
+        let answers: Vec<Option<ServerWorkspaces>> = std::thread::scope(|s| {
+            jobs.iter().map(|(server, cookie)| s.spawn(|| ask(&agent, server, cookie, &logos))).collect::<Vec<_>>().into_iter().map(join_ask).collect()
+        });
+        slow_thread.join().unwrap();
+        fast_thread.join().unwrap();
+        assert_eq!(answers.len(), 2);
+        let (Some(slow_answer), Some(fast_answer)) = (&answers[0], &answers[1]) else {
+            panic!("both servers answer: {answers:?}");
+        };
+        assert_eq!(slow_answer.server, slow);
+        assert_eq!(fast_answer.server, fast);
+        for (answer, name) in [(&slow_answer, "Slow"), (&fast_answer, "Fast")] {
+            assert!(answer.signed_in);
+            assert_eq!(answer.orgs.len(), 1);
+            assert_eq!((answer.orgs[0].name.as_str(), answer.orgs[0].unread, answer.orgs[0].waiting), (name, 2, 1));
+        }
     }
 }

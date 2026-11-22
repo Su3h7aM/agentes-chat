@@ -1,5 +1,6 @@
 import {
   isScreenTool,
+  type LiveOutput,
   type LiveWork,
   type Run,
   type RunStep,
@@ -196,6 +197,22 @@ function cliBlockLine(t: TFunction, locale: string, l: ToolLine, cli: CliLine): 
 /** The words of a line in the block's closed head: a computer's own call names what it works on too. */
 const headText = (line: ToolBlockLine) => (line.target ? `${line.label} ${line.target}` : line.label);
 
+/**
+ * The output's size in bytes, counted once for each list: a done call keeps its line drawn again on every news of the
+ * run, and its text is up to OUTPUT_LIMIT characters. The run and the call share the list (`appendOutput`), so they
+ * share the count too.
+ */
+const outputSizes = new WeakMap<LiveOutput[], number>();
+const BYTES = new TextEncoder();
+function outputBytes(output: LiveOutput[]): number {
+  let bytes = outputSizes.get(output);
+  if (bytes === undefined) {
+    bytes = output.reduce((n, o) => n + BYTES.encode(o.text).length, 0);
+    outputSizes.set(output, bytes);
+  }
+  return bytes;
+}
+
 /** A line of the block from the shared model: its phrase, time, open view (code, output, what it got and gave). */
 function blockLine(t: TFunction, locale: string, l: ToolLine, logo: ReactNode, personal = false) {
   if (l.cli) return cliBlockLine(t, locale, l, l.cli);
@@ -206,10 +223,7 @@ function blockLine(t: TFunction, locale: string, l: ToolLine, logo: ReactNode, p
       ? t("code.ranSummary", {
           count: lines,
           language: l.code.language,
-          size: formatBytes(
-            locale,
-            output.reduce((n, o) => n + new TextEncoder().encode(o.text).length, 0),
-          ),
+          size: formatBytes(locale, outputBytes(output)),
         })
       : toolPhrase(t, l, locale);
   const why = toolWhy(t, l, personal);

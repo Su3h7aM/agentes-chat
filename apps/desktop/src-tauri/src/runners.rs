@@ -452,15 +452,22 @@ struct LineSplitter {
 }
 
 /// A whole protocol line: every message is one JSON object (a bare number or string could be the
-/// tail of a line cut in two).
+/// tail of a line cut in two). A single parse; the hot path never parses twice for one line.
 fn is_json(bytes: &[u8]) -> bool {
     bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
         && matches!(serde_json::from_slice::<serde_json::Value>(bytes), Ok(serde_json::Value::Object(_)))
 }
 
+/// Whether `haystack` holds `needle` (a small substring search without another dependency).
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty() || haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 impl LineSplitter {
     fn push(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
+        // Stray output glued before a whole JSON line: drop the stray part, so later lines get through.
+        // Only this recovery path parses; complete lines split below parse once in `handle_line`.
         if !self.buf.is_empty() {
             let first = match chunk.iter().position(|b| *b == b'\n') {
                 Some(pos) => &chunk[..pos],
@@ -475,9 +482,17 @@ impl LineSplitter {
             }
         }
         self.buf.extend_from_slice(chunk);
-        while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=pos).collect();
-            out.push(line);
+        // One scan for newlines and a single drain of the consumed prefix, instead of a memmove per line.
+        let mut consumed = 0;
+        let mut at = 0;
+        while let Some(rel) = self.buf[at..].iter().position(|b| *b == b'\n') {
+            let pos = at + rel;
+            out.push(self.buf[consumed..=pos].to_vec());
+            consumed = pos + 1;
+            at = consumed;
+        }
+        if consumed > 0 {
+            self.buf.drain(..consumed);
         }
         if is_json(&self.buf) {
             out.push(std::mem::take(&mut self.buf));
@@ -489,14 +504,29 @@ impl LineSplitter {
     }
 }
 
-fn handle_line(app: &AppHandle, home_id: &str, generation: u64, raw: &[u8]) {
-    let text = String::from_utf8_lossy(raw);
-    let line = text.trim();
-    if line.is_empty() || line.len() > MAX_LINE {
-        return;
+/// The line `handle_line` emits for `raw`: `raw` trimmed of ASCII whitespace (`is_ascii_whitespace`),
+/// unless nothing is left or it outgrows `MAX_LINE`. Only ASCII whitespace goes: `str::trim` would
+/// also strip non-ASCII whitespace (a lone no-break space, `U+00A0`), this keeps it. Protocol lines
+/// are JSON separated by ASCII whitespace, so for every line the runner sends the two agree; the
+/// guarantee here is just the ASCII trim, the length cap and no allocation for the decision itself.
+fn trimmed_line(raw: &[u8]) -> Option<&[u8]> {
+    let mut start = 0;
+    let mut end = raw.len();
+    while start < end && raw[start].is_ascii_whitespace() {
+        start += 1;
     }
-    if line.contains("\"hello\"") {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+    while end > start && raw[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let line = &raw[start..end];
+    (!line.is_empty() && line.len() <= MAX_LINE).then_some(line)
+}
+
+fn handle_line(app: &AppHandle, home_id: &str, generation: u64, raw: &[u8]) {
+    let Some(line) = trimmed_line(raw) else { return };
+    // One parse per hello candidate (a byte prefilter skips every other line); the line is emitted below.
+    if contains_bytes(line, b"\"hello\"") {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) {
             if value.get("type").and_then(|t| t.as_str()) == Some("hello") {
                 let runners = app.state::<Runners>();
                 let mut map = runners.lock();
@@ -512,7 +542,7 @@ fn handle_line(app: &AppHandle, home_id: &str, generation: u64, raw: &[u8]) {
         LINE_EVENT,
         LinePayload {
             home_id: home_id.to_string(),
-            line: line.to_string(),
+            line: String::from_utf8_lossy(line).into_owned(),
         },
     );
 }
@@ -593,7 +623,7 @@ fn paired_home(dir: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_homes, drop_unpaired, host_homes_in, no_longer_ours, LineSplitter};
+    use super::{app_homes, drop_unpaired, host_homes_in, no_longer_ours, trimmed_line, LineSplitter, MAX_LINE};
     use std::path::PathBuf;
 
     #[test]
@@ -698,5 +728,22 @@ mod tests {
         assert_eq!(texts(s.push(b"warning: something")), Vec::<String>::new());
         assert_eq!(texts(s.push(br#"{"type":"event"}"#)), vec![r#"{"type":"event"}"#]);
         assert_eq!(texts(s.push(br#"{"type":"reply"}"#)), vec![r#"{"type":"reply"}"#]);
+    }
+
+    #[test]
+    fn the_emitted_line_is_the_ascii_trim() {
+        // What `handle_line` emits for `raw`: ASCII whitespace goes, the rest stays byte for byte.
+        assert_eq!(trimmed_line(b"  {\"type\":\"hello\"}  \n"), Some(br#"{"type":"hello"}"#.as_slice()));
+        assert_eq!(trimmed_line(b"\t\r\n"), None, "nothing left: dropped, as before");
+        assert_eq!(trimmed_line(b""), None);
+        let long = vec![b'x'; MAX_LINE + 1];
+        assert_eq!(trimmed_line(&long), None, "over the cap: dropped");
+        assert_eq!(trimmed_line(&vec![b'x'; MAX_LINE]).unwrap().len(), MAX_LINE);
+        // Not `str::trim`: a lone no-break space (U+00A0, bytes C2 A0) stays, where
+        // `from_utf8_lossy` + `trim` dropped it. Protocol lines are JSON separated by ASCII
+        // whitespace, so no line the runner sends hits this; the guarantee is the ASCII trim.
+        assert_eq!("\u{a0}".trim(), "", "what the previous trim did with it");
+        assert_eq!(trimmed_line("\u{a0}".as_bytes()), Some("\u{a0}".as_bytes()));
+        assert_eq!(trimmed_line(" \u{a0} ".as_bytes()), Some("\u{a0}".as_bytes()));
     }
 }

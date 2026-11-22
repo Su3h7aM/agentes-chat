@@ -1,16 +1,15 @@
 /**
  * Living agents: one shared loop draws every agent avatar on screen from the
- * agent engine (engine.js). Only what says something moves: an agent at work
- * or waiting on someone, a face playing or the gaze, about 24 times a second,
- * and an agent under the pointer, about 12 (every blink still shows; a slow
- * turn reads the same). An agent at rest or asleep stands still, drawn once
- * as with reduced motion: its blinks and turns cost a frame each for every
- * avatar on screen, with nothing to say. With nobody looking (`sight`, ADR
- * 0228) none moves, after a while with no input only one at work does, and
- * with nothing moving the loop stops. A page can set a gaze point
- * (the landing's pointer): avatars inside an element marked `data-gaze` turn
- * their heads toward it.
+ * agent engine (engine.js). Only visible avatars are drawn: about 24 times a
+ * second while the agent works, reacts or follows the gaze, about 12 at rest
+ * (every blink still shows; a slow turn reads the same). With nobody looking
+ * (`sight`, ADR 0228) none moves; after a while with no input only one at work
+ * does, and with nothing moving the loop stops. With reduced motion, or in a
+ * window painted in software (`liveDrawingHeld`), each one is drawn once, still.
+ * A page can set a gaze point (the landing's pointer): avatars inside an element
+ * marked `data-gaze` turn their heads toward it.
  */
+import { liveDrawingHeld } from "../live-drawing";
 import { onSight, type Sight, sight } from "../sight";
 import { avatarSky } from "../sky/avatar";
 import { PAINT_ATTRS } from "../theme";
@@ -135,15 +134,23 @@ const sizes = new WeakMap<HTMLElement, number>();
 let resizes: ResizeObserver | null = null;
 let darkCache = new WeakMap<Element, boolean>();
 let motionQuery: MediaQueryList | null | undefined;
+/** Still: the person asked for reduced motion, or the app's window paints in software (`liveDrawingHeld`). */
 const reduced = () => {
   if (motionQuery === undefined) {
     motionQuery = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
-    // Motion allowed again: the loop starts moving.
+    // Motion allowed again (and the window painting on the graphics card): the loop starts moving.
     motionQuery?.addEventListener?.("change", () => {
-      if (!motionQuery?.matches) wakeLiveAgents();
+      if (
+        !motionQuery?.matches &&
+        !liveDrawingHeld() &&
+        !raf &&
+        agents.size &&
+        typeof requestAnimationFrame === "function"
+      )
+        raf = requestAnimationFrame(tick);
     });
   }
-  return motionQuery?.matches === true;
+  return liveDrawingHeld() || motionQuery?.matches === true;
 };
 
 // From the ResizeObserver, which reads it while the layout is fresh. Read here, right after another avatar's canvas

@@ -37,12 +37,27 @@ Licensing: AGPL-3.0-only for everything public, outside contributions under the 
 - Unit tests are required. They run on in-memory PGlite and fakes (a fake model provider from `@agenteschat/providers/testing`): no Docker, no local Postgres, no `.env`, no network.
 - Real credentials go only in `.env` (only `dev`/`start` read it). Local development uses its own `DATABASE_URL`, never a production one.
 - To fix a failure, run one test file (`bun test path/to/file.test.ts`); CI runs the full suite.
+- To verify a change, run only the tests that cover the code you touched (`bun test <files>`), never the whole suite: on a developer machine it takes more than 8 hours. If a changed file has no covering test, say so instead of running unrelated tests.
 
 ## Commands
 
-`bun run ci:local` (every CI check but the image boot) · `bun test` · `bun run typecheck` · `bun run lint` · `bun run format` · `bun run check:boundaries` · `bun run check:licenses` · `bun run db:generate <name>` · `bun run docs:env` · `bun run dev`
+`bun run ci:local` (every CI check but the image boot) · `bun test` (full suite — CI's job, see the test rule above) · `bun run typecheck` · `bun run lint` · `bun run format` · `bun run check:boundaries` · `bun run check:licenses` · `bun run db:generate <name>` · `bun run docs:env` · `bun run dev`
 
-Run lint, typecheck, tests and boundaries before declaring work done.
+Run lint, typecheck, the tests covering your change, and boundaries before declaring work done; the full suite is CI's job.
+
+## UI behaviors (ui-sdk)
+
+Our design system (`docs/design/*`) stays original: never import a ui-sdk _component_ or stylesheet (`@ui-sdk/react/*`, `web.css`) — buttons, inputs, icons, menus and dialogs are ours, with Radix supplying the accessible shells for select/menu/dialog/tabs/popover. For a _behavior_ with no visual output, prefer the framework-free primitive from `@ui-sdk/core` (an `apps/web` dependency) over hand-rolling, when it owns an edge case we would otherwise repeat:
+
+- chat/log following → `createStickToBottom` (`OutputView` in `apps/web/src/components/LiveCode.tsx` is the pattern; never another `pinned` ref + ResizeObserver loop);
+- screen-reader announcements → `announce` (never `aria-live` on a streaming region — it announces every mutation);
+- lists that render everything → `createVirtualizer` (with `findable` so ⌘F keeps working on unrendered rows);
+- arrow-navigated option lists → `createListbox` (disabled-aware, `keepInView`);
+- search ranking/highlighting → `fuzzyScore` + `matchSegments` (not substring-only where ranking matters);
+- item multi-select with ranges → `createSelection`; composer recall → `createInputHistory`;
+- new keyboard shortcuts → `matchesShortcut` / `formatShortcut` / `ariaKeyshortcuts`.
+
+Do not adopt: popup/menu/dialog/tooltip presets (Radix covers them), canvas/viewport helpers (`zoom.ts` is domain math), board reorder/transfer (`issue-drag`/`grid-drag` own their physics — unify those two first), panel/enter-exit transitions (native `<details>` and `data-leaving` CSS are correct), tree helpers (no tree widget), inline edit (renames are modal dialogs by design), date-grid arithmetic (`DatePicker` + `localeInfo` are correct), `isComposing` (`composes()` in `packages/ui/src/device.ts` already handles the Safari 229 case). An adopted primitive keeps our markup, CSS classes and product behavior identical: behavior-only, minimal diff, no workarounds.
 
 ## Map
 

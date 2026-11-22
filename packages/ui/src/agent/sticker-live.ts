@@ -1,8 +1,10 @@
 /**
  * Living stickers (ADR 0091): one shared loop draws every sticker on screen, about 25 times a second, and only the
- * ones in view (a picker full of them, or a long conversation, costs what is visible). With reduced motion the loop
- * stands still: each sticker is drawn once, at its still frame, and again when what it shows changes.
+ * ones in view (a picker full of them, or a long conversation, costs what is visible). With reduced motion, or in a
+ * window painted in software (`liveDrawingHeld`), the loop stands still: each sticker is drawn once, at its still
+ * frame, and again when what it shows changes.
  */
+import { liveDrawingHeld } from "../live-drawing";
 import { drawSticker, STICKER_STILL_T, type StickerLook, type StickerMood } from "./stickers";
 
 export interface LiveSticker {
@@ -23,6 +25,7 @@ let observer: IntersectionObserver | null = null;
 const FRAME_MS = 40;
 
 let motionQuery: MediaQueryList | null | undefined;
+/** Still: the person asked for reduced motion, or the app's window paints in software (`liveDrawingHeld`). */
 const reduced = () => {
   if (motionQuery === undefined) {
     motionQuery = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
@@ -32,7 +35,7 @@ const reduced = () => {
       else for (const s of stickers) drawLiveSticker(s, STICKER_STILL_T);
     });
   }
-  return motionQuery?.matches === true;
+  return liveDrawingHeld() || motionQuery?.matches === true;
 };
 
 /** The loop's clock, in seconds. */

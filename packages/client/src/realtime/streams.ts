@@ -264,8 +264,13 @@ export interface AgentToolProgressEvent {
   progress: unknown;
 }
 
-/** Appends output, merging with the last chunk of the same stream and keeping the last OUTPUT_LIMIT chars. */
+/**
+ * Appends output, merging with the last chunk of the same stream and keeping the last OUTPUT_LIMIT chars. A chunk with
+ * no words gives back the very list it was given (nothing to copy); on an empty output it still makes the one entry,
+ * since a list with no chunk at all reads as no output.
+ */
 export function appendOutput(list: LiveOutput[], chunk: LiveOutput, limit = OUTPUT_LIMIT): LiveOutput[] {
+  if (!chunk.text) return list.length === 0 ? [chunk] : list;
   const last = list[list.length - 1];
   const next =
     last && last.stream === chunk.stream
@@ -584,6 +589,8 @@ function applyEvent(state: StreamsState, event: StreamEvent): StreamsState {
       // A new call starts fresh; `tool: null` (the call ended) keeps the last code and output on screen.
       const newCall = event.tool !== null;
       let work = current?.work ?? [];
+      // One list for a new call's output and for its run's (`agent.tool.output` grows both with the same append).
+      const fresh: LiveOutput[] = [];
       const end = (
         w: Extract<LiveWork, { kind: "call" }>,
         how: Pick<AgentToolEvent, "failed" | "slip" | "held" | "why" | "refusal" | "requestId" | "autoApproved"> = {},
@@ -622,7 +629,7 @@ function applyEvent(state: StreamsState, event: StreamEvent): StreamsState {
             detail: event.detail ?? null,
             code: event.code ?? null,
             ...(event.command ? { command: event.command } : {}),
-            output: [],
+            output: fresh,
             running: true,
           },
         ];
@@ -649,7 +656,7 @@ function applyEvent(state: StreamsState, event: StreamEvent): StreamsState {
         serviceIcon: event.serviceIcon ?? null,
         toolDetail: event.detail ?? null,
         // A call means the model has the turn: whatever came before it is over, even if its end was never heard.
-        ...(newCall ? { code: event.code ?? null, output: [], phase: undefined } : {}),
+        ...(newCall ? { code: event.code ?? null, output: fresh, phase: undefined } : {}),
         // A new call is the step now: its own words, or none (the call's verb says it). The computer's permission
         // check before a command is no step of its own: the command it lets through was told a moment before
         // (`agent.step`) and stays the step while it runs, or the bar would say "thinking" for as long as it takes.
@@ -726,7 +733,8 @@ function applyEvent(state: StreamsState, event: StreamEvent): StreamsState {
       const current = state.runs[event.runId];
       if (!current) return state;
       const chunk = { stream: event.stream, text: event.text };
-      const output = appendOutput(current.output ?? [], chunk);
+      const before = current.output ?? [];
+      const output = appendOutput(before, chunk);
       // Into its call (by id, else the last running one).
       const work = [...(current.work ?? [])];
       let at = -1;
@@ -738,7 +746,10 @@ function applyEvent(state: StreamsState, event: StreamEvent): StreamsState {
         }
       }
       const call = work[at];
-      if (call?.kind === "call") work[at] = { ...call, output: appendOutput(call.output, chunk) };
+      // The call's list and its run's are one, since the call began (`agent.tool` starts both empty): these words are
+      // appended once, and both read the one list. A chunk for an older call keeps to that call's own list.
+      if (call?.kind === "call")
+        work[at] = { ...call, output: call.output === before ? output : appendOutput(call.output, chunk) };
       return { ...state, runs: { ...state.runs, [event.runId]: { ...current, output, work } } };
     }
     case "message.created": {

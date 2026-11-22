@@ -897,7 +897,7 @@ pub fn run() {
             let resume = prepare::resume(&handle, at_login);
             let background = at_login;
             #[cfg(target_os = "linux")]
-            let background = background && tray::shown(&handle);
+            let background = background && tray::shown_at_startup(&handle);
             if servers::current(&handle).is_none() {
                 let _ = present(&handle, "welcome");
             } else if !background {
