@@ -361,6 +361,7 @@ export {
   WorkSweep,
 } from "./components/RunPixels";
 export { SavedNote } from "./components/SavedNote";
+export { SearchMark } from "./components/SearchMark";
 export { AgentSearching } from "./components/SearchPixels";
 export { SearchSelect, type SearchSelectLabels, type SearchSelectProps } from "./components/SearchSelect";
 export { Segmented, type SegmentedOption, SplitButton } from "./components/Segmented";
@@ -531,7 +532,16 @@ export {
   weekdayPosition,
   zonedInstant,
 } from "./recurrence";
-export { fold, matchesWords } from "./search";
+export {
+  fold,
+  highlightSegments,
+  type MatchRange,
+  type MatchSegment,
+  matchesWords,
+  matchWordRanges,
+  rankedScore,
+  rankOptions,
+} from "./search";
 export { IDLE_MS, onSight, type Sight, sight, watchSight } from "./sight";
 export { workspaceSky } from "./sky/accent";
 export { pixelBurst, pixelConfetti, pixelVeil } from "./sky/burst";

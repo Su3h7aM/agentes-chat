@@ -1,9 +1,11 @@
+import { createListbox } from "@ui-sdk/core";
 import { Popover as RPopover } from "radix-ui";
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { cx } from "../cx";
 import { EDGE_ROOM } from "../floating";
-import { matchesWords } from "../search";
+import { rankedScore } from "../search";
 import { useFieldControl } from "./Field";
+import { SearchMark } from "./SearchMark";
 import { ChosenValue, type SelectOption } from "./Select";
 import { SearchField } from "./Toolbar";
 
@@ -26,9 +28,13 @@ export interface SearchSelectProps<V extends string = string, O extends SelectOp
   labels: SearchSelectLabels;
   /** A group's heading; default: the group as given. */
   groupLabel?: (group: string) => string;
-  /** Whether an option is among what was typed; default: every word in its label, value or group. */
-  matches?: (option: O, query: string) => boolean;
-  /** A row; default: its leading mark, label and description, as `Select` draws them. */
+  /**
+   * How an option answers what was typed: a score ranks it (above 0 answers,
+   * best first), `true` keeps it in place. Default: a ranked score over its
+   * label, value and group.
+   */
+  matches?: (option: O, query: string) => boolean | number;
+  /** A row before its check; default: its leading mark, label and description, as `Select` draws them. */
   renderOption?: (option: O) => ReactNode;
   /** What the trigger shows; default: the chosen option's face or logo and its label, as `Select`'s, else `placeholder`. */
   renderValue?: (option: O | undefined) => ReactNode;
@@ -46,19 +52,20 @@ export interface SearchSelectProps<V extends string = string, O extends SelectOp
   className?: string;
 }
 
-const defaultMatches = (o: SelectOption, query: string) =>
-  matchesWords(`${o.label} ${o.value} ${o.group ?? ""}`, query);
+const defaultMatches = (o: SelectOption, query: string) => rankedScore(`${o.label} ${o.value} ${o.group ?? ""}`, query);
 
-const defaultRow = (o: SelectOption) => (
+const DefaultRow = ({ option, query }: { option: SelectOption; query: string }) => (
   <>
-    {o.leading && (
+    {option.leading && (
       <span className="ac-menu__leading" aria-hidden="true">
-        {o.leading}
+        {option.leading}
       </span>
     )}
     <span className="ac-menu__label">
-      <span>{o.label}</span>
-      {o.description && <span className="ac-menu__desc">{o.description}</span>}
+      <span>
+        <SearchMark text={option.label} query={query} />
+      </span>
+      {option.description && <span className="ac-menu__desc">{option.description}</span>}
     </span>
   </>
 );
@@ -74,10 +81,13 @@ function groupsOf<O extends SelectOption>(options: O[]) {
   return out;
 }
 
+type Highlighted = { highlighted: string | null };
+
 /**
  * One choice from a long list: our trigger, then a glass dropdown with a search over the options, in their groups,
- * the chosen one on its plate, its name heavier. Combobox semantics, arrows / Home / End / Page keys / Enter / Esc, `aria-activedescendant`.
- * A disabled option shows, but can't be picked. `footer` stays under the list whatever is typed.
+ * the chosen one checked. Combobox semantics, arrows / Home / End / Page keys / Enter / Esc, `aria-activedescendant`.
+ * The highlight skips disabled options (they show, but can't be picked) and wraps around; moving it scrolls only the
+ * list. Typing ranks the options, best first, and marks the match. `footer` stays under the list whatever is typed.
  */
 export function SearchSelect<V extends string = string, O extends SelectOption<V> = SelectOption<V>>({
   value,
@@ -107,28 +117,78 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
     setOpen(true);
   }, [defaultOpen, disabled]);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const highlightedRef = useRef<string | null>(null);
   const all = useMemo(() => (Array.isArray(options) ? options : open ? options() : []), [options, open]);
-  const groups = useMemo(
-    () => groupsOf(query.trim() ? all.filter((o) => matches(o, query)) : all),
-    [all, query, matches],
-  );
-  const flat = useMemo(() => groups.flatMap(([, list]) => list), [groups]);
-  const optionId = (i: number) => `${listId}-o${i}`;
+  const flat = useMemo(() => {
+    if (!query.trim()) return all;
+    return all
+      .map((o) => {
+        const found = matches(o, query);
+        return { o, score: typeof found === "number" ? found : found ? 1 : 0 };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.o);
+  }, [all, query, matches]);
+  const flatRef = useRef(flat);
+  flatRef.current = flat;
+  const groups = useMemo(() => groupsOf(flat), [flat]);
   const chosen = Array.isArray(options) ? options.find((o) => o.value === value) : undefined;
 
-  // Opening starts on the chosen option; typing goes back to the first match.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only when it opens
-  useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setActive(
-      Math.max(
-        0,
-        all.findIndex((o) => o.value === value),
+  // The listbox owns the highlight: virtual focus (it stays in the search field), looping, disabled options skipped,
+  // and the highlighted row kept in view. Filtering and ranking stay here, over `flat`.
+  const listbox = useMemo(
+    () =>
+      createListbox(
+        {
+          id: listId,
+          store: {
+            get: (): Highlighted => ({ highlighted: highlightedRef.current }),
+            set: (patch: Highlighted) => {
+              highlightedRef.current = patch.highlighted;
+              setHighlighted(patch.highlighted);
+            },
+          },
+        } as never,
+        {
+          key: "highlighted",
+          focus: "virtual",
+          items: () => flatRef.current.map((o) => ({ value: o.value, label: o.label, disabled: o.disabled })),
+          query: () => "",
+          filter: () => false,
+          loop: () => true,
+        },
       ),
-    );
-  }, [open]);
+    [listId],
+  );
+
+  // Opening starts on the chosen option (when it can be picked), else the first pickable one; typing goes back to
+  // the first match. Only the option keys matter: a parent re-render with the same options keeps the highlight.
+  const openedRef = useRef(false);
+  const keysRef = useRef("");
+  useEffect(() => {
+    if (!open) {
+      openedRef.current = false;
+      return;
+    }
+    const keys = flat.map((o) => o.value).join("\0");
+    if (!openedRef.current) {
+      // A stale query narrows the fresh list: clear it first, highlight once the full list is back.
+      if (query) {
+        setQuery("");
+        return;
+      }
+      openedRef.current = true;
+      keysRef.current = keys;
+      const start = all.find((o) => o.value === value);
+      if (start && !start.disabled) listbox.highlight(start.value);
+      else listbox.move("first");
+    } else if (keys !== keysRef.current) {
+      keysRef.current = keys;
+      listbox.move("first");
+    }
+  }, [open, flat, all, value, listbox, query]);
   // Opening brings the whole popup into view, once: the page moves only then, never for a choice or a key.
   useEffect(() => {
     if (!open) return;
@@ -137,17 +197,6 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
     );
     return () => cancelAnimationFrame(frame);
   }, [open, listId]);
-  // Moving through the options scrolls only the list, so the page stays where it is.
-  useEffect(() => {
-    if (!open) return;
-    const option = document.getElementById(optionId(active));
-    const list = option?.closest<HTMLElement>('[role="listbox"]');
-    if (!option || !list) return;
-    const o = option.getBoundingClientRect();
-    const l = list.getBoundingClientRect();
-    if (o.top < l.top) list.scrollTop -= l.top - o.top;
-    else if (o.bottom > l.bottom) list.scrollTop += o.bottom - l.bottom;
-  });
 
   const pick = (o: O | undefined) => {
     if (!o || o.disabled) return;
@@ -155,19 +204,23 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
     setOpen(false);
   };
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    const last = flat.length - 1;
-    if (e.key === "ArrowDown") setActive((a) => Math.min(last, a + 1));
-    else if (e.key === "ArrowUp") setActive((a) => Math.max(0, a - 1));
-    else if (e.key === "Home") setActive(0);
-    else if (e.key === "End") setActive(last);
-    else if (e.key === "PageDown") setActive((a) => Math.min(last, a + 10));
-    else if (e.key === "PageUp") setActive((a) => Math.max(0, a - 10));
-    else if (e.key === "Enter") pick(flat[active]);
-    else return;
-    e.preventDefault();
+    // Arrows and Page keys move through the options, skipping the disabled ones; Enter and Home/End are ours.
+    const moved = listbox.keydown(e.nativeEvent);
+    if (moved !== undefined) return;
+    if (e.key === "Home") {
+      e.preventDefault();
+      listbox.move("first");
+    } else if (e.key === "End") {
+      e.preventDefault();
+      listbox.move("last");
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const current = flatRef.current.find((o) => o.value === highlightedRef.current);
+      pick(current ?? flatRef.current.find((o) => !o.disabled));
+    }
   };
 
-  let index = -1;
+  const state = { highlighted };
   return (
     <div className={cx("ac-select", className)}>
       <RPopover.Root open={open} onOpenChange={setOpen}>
@@ -215,13 +268,10 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
                 aria-expanded="true"
                 aria-controls={listId}
                 aria-autocomplete="list"
-                aria-activedescendant={flat.length ? optionId(active) : undefined}
+                aria-activedescendant={flat.length ? listbox.activeId(state) : undefined}
                 placeholder={labels.searchPlaceholder}
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setActive(0);
-                }}
+                onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onKey}
               />
             </div>
@@ -231,23 +281,29 @@ export function SearchSelect<V extends string = string, O extends SelectOption<V
               )}
               {groups.map(([group, list], g) => {
                 const rows = list.map((o) => {
-                  index += 1;
-                  const i = index;
+                  const part = { key: o.value, props: { value: o.value, label: o.label, disabled: o.disabled } };
+                  const attrs = listbox.attrs(state, part);
                   return (
                     // biome-ignore lint/a11y/useFocusableInteractive: options are reached through aria-activedescendant
                     // biome-ignore lint/a11y/useKeyWithClickEvents: the search field handles the keys
                     <div
                       key={o.value}
-                      id={optionId(i)}
+                      ref={(el) => {
+                        if (el) return listbox.bind(el, part);
+                      }}
+                      id={attrs.id}
                       role="option"
                       aria-selected={o.value === value}
                       aria-disabled={o.disabled || undefined}
-                      data-active={i === active || undefined}
+                      data-highlighted={attrs["data-highlighted"]}
+                      data-active={o.value === highlighted || undefined}
                       className={cx("ac-tz__option", !renderOption && "ac-search__option")}
-                      onPointerMove={() => setActive(i)}
+                      onPointerMove={() => {
+                        if (!o.disabled) listbox.highlight(o.value);
+                      }}
                       onClick={() => pick(o)}
                     >
-                      {renderOption ? renderOption(o) : defaultRow(o)}
+                      {renderOption ? renderOption(o) : <DefaultRow option={o} query={query} />}
                     </div>
                   );
                 });

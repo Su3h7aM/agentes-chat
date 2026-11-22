@@ -26,6 +26,7 @@ import {
   Popover,
   ProviderLogo,
   RoleMark,
+  rankedScore,
   SearchSelect,
   Select,
   type SelectOption,
@@ -111,7 +112,7 @@ export function BrainPickSelect({
         if (o) onChange(o);
       }}
       options={shown}
-      matches={(o, q) => matchesWords(brainPickText(o), q)}
+      matches={(o, q) => rankedScore(brainPickText(o), q)}
       labels={{
         search: t("models.search"),
         searchPlaceholder: t("newAgent.brainPick.searchPlaceholder"),

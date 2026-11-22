@@ -413,8 +413,9 @@ describe("command palette", () => {
     { key: "s1", group: "Ir para", label: "Conectores", sub: "configurações", onSelect: () => picked.push("conn") },
     { key: "s2", group: "Ir para", label: "Skills", sub: "configurações", onSelect: () => picked.push("skills") },
   ];
-  test("filter: every word, accents and case ignored", () => {
-    expect(filterPalette(items, "config").map((i) => i.key)).toEqual(["s1", "s2"]);
+  test("filter: ranked, every word, accents and case ignored", () => {
+    // Ranked: the shorter row matches the same word better, so it comes first.
+    expect(filterPalette(items, "config").map((i) => i.key)).toEqual(["s2", "s1"]);
     expect(filterPalette(items, "CONFIGURACOES skills").map((i) => i.key)).toEqual(["s2"]);
     expect(filterPalette(items, "").length).toBe(4);
     // A search-only item (an agent's tab) stays out of the open palette and shows once typed.
@@ -465,13 +466,13 @@ describe("command palette", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual([
-      expect.stringContaining("Conectores"),
       expect.stringContaining("Skills"),
+      expect.stringContaining("Conectores"),
       expect.stringContaining("Theo, config"),
     ]);
     await act(async () => fireEvent.keyDown(input, { key: "ArrowDown" }));
     await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
-    expect(picked).toEqual(["skills"]);
+    expect(picked).toEqual(["conn"]);
     expect(open).toBe(false);
     rerender(
       <CommandPalette

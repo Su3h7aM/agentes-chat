@@ -1,7 +1,9 @@
 import { Dialog as RDialog } from "radix-ui";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { cx } from "../cx";
+import { rankedScore } from "../search";
 import { Kbd } from "./Kbd";
+import { SearchMark } from "./SearchMark";
 
 export interface PaletteItem {
   key: string;
@@ -19,19 +21,20 @@ export interface PaletteItem {
   onSelect: () => void;
 }
 
-const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-
 /**
- * Items whose label, sub or keywords contain every word of the query (accents and case ignored).
- * With no query, everything but the `searchOnly` ones.
+ * Items answering `query`, best first: every word must match the label, sub or keywords (accents and case aside),
+ * and better matches rank higher. With no query, everything but the `searchOnly` ones, in order.
  */
 export function filterPalette(items: PaletteItem[], query: string): PaletteItem[] {
-  const words = fold(query).split(/\s+/).filter(Boolean);
-  if (words.length === 0) return items.filter((i) => !i.searchOnly);
-  return items.filter((i) => {
-    const hay = fold(`${i.label} ${i.sub ?? ""} ${i.keywords ?? ""}`);
-    return words.every((w) => hay.includes(w));
-  });
+  if (!query.trim()) return items.filter((i) => !i.searchOnly);
+  return items
+    .map((item) => ({
+      item,
+      score: rankedScore(`${item.label} ${item.sub ?? ""} ${item.keywords ?? ""}`, query),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.item);
 }
 
 /**
@@ -149,7 +152,9 @@ export function CommandPalette({
                       onKeyDown={() => {}}
                     >
                       <span className="ac-menu__leading ac-palette__mark">{item.mark}</span>
-                      <span className="ac-palette__label">{item.label}</span>
+                      <span className="ac-palette__label">
+                        <SearchMark text={item.label} query={q} />
+                      </span>
                       {item.sub && <span className="ac-palette__sub">{item.sub}</span>}
                       {i === current && <Kbd className="ac-palette__enter">↵</Kbd>}
                     </div>

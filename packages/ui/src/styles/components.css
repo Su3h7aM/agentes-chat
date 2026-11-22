@@ -151,17 +151,18 @@ html[data-pointer] :focus-visible {
  * container's face into its own in dark.
  */
 :where(
-  .ac-dialog,
-  .ac-details,
-  .ac-card,
-  .ac-list,
-  .ac-menu,
-  .ac-toast,
-  .ac-glass,
-  .ac-composer,
-  .ac-approval,
-  .ac-alert
-) > * {
+    .ac-dialog,
+    .ac-details,
+    .ac-card,
+    .ac-list,
+    .ac-menu,
+    .ac-toast,
+    .ac-glass,
+    .ac-composer,
+    .ac-approval,
+    .ac-alert
+  )
+  > * {
   --raised: var(--raised-2);
   --surface-raised: var(--raised-2);
   --card-face-top: var(--raised-2);
@@ -2660,7 +2661,7 @@ html:not([data-pointer]) .ac-menu__item:focus-visible,
  * top.
  */
 :is(.ac-menu__item, .ac-search__option):has(> .ac-menu__label > .ac-menu__desc)
-> .ac-menu__leading:has(> .ac-icon, > .ac-brand--xs, > .ac-avatar--xs, > .ac-avatar--sm, > .ac-avatar-stack) {
+  > .ac-menu__leading:has(> .ac-icon, > .ac-brand--xs, > .ac-avatar--xs, > .ac-avatar--sm, > .ac-avatar-stack) {
   align-self: flex-start;
   /* Browsers without the lh unit: the option's 20px line. */
   translate: 0 calc(10px - var(--cap-mid) - 50%);
@@ -9929,13 +9930,12 @@ html:not([data-pointer]) .ac-recur__day:focus-visible {
 .ac-search__option {
   align-items: center;
 }
-/* One choice, so no check column (as `Select`): the chosen option sits on its plate, its name heavier. */
-.ac-search__list .ac-tz__option[aria-selected="true"] {
-  background: rgba(127, 127, 127, 0.14);
-  font-weight: 600;
-}
-.ac-search__list .ac-tz__option[data-active]:not([aria-selected="true"]) {
-  background: rgba(127, 127, 127, 0.07);
+/* The match in a searched label: a soft wash behind the letters, the ink as given, in both themes. */
+.ac-search__mark {
+  background: var(--agent-soft);
+  color: inherit;
+  border-radius: 2px;
+  padding-inline: 1px;
 }
 /* A searchable list with people, agents or roles in it is an OptionRow list: every row the faces' room around them (6,
    10 on touch), every face and mark the list's one size. */
@@ -10423,9 +10423,10 @@ html:not([data-pointer]) .ac-grouphead__title > button:focus-visible {
  * scrolling sideways in its own track when its choices are wider.
  */
 .ac-toolbar[data-stack]:has(
-  > .ac-toolbar__filters > :only-child:not(.ac-filterbar, .ac-seg),
-  > .ac-toolbar__filters > .ac-filterbar:only-child > :only-child
-) > :is(.ac-toolbar__filters, .ac-toolbar__actions) {
+    > .ac-toolbar__filters > :only-child:not(.ac-filterbar, .ac-seg),
+    > .ac-toolbar__filters > .ac-filterbar:only-child > :only-child
+  )
+  > :is(.ac-toolbar__filters, .ac-toolbar__actions) {
   order: 1;
 }
 .ac-toolbar[data-stack]:has(> .ac-toolbar__actions):has(
@@ -11203,7 +11204,7 @@ html:not([data-pointer]) .ac-filter__option:focus-visible {
      tap leaves behind, or a tap on a control in the row, would put it on the text. A field one types in is :focus-visible
      after a tap too, so it doesn't count (`:read-write`). */
   .ac-msg:is(:hover, :focus-within):not(:has(:focus-visible:not(:read-write)))
-  .ac-msg__actions:not([data-open="true"], :has([aria-expanded="true"])) {
+    .ac-msg__actions:not([data-open="true"], :has([aria-expanded="true"])) {
     opacity: 0;
     pointer-events: none;
   }
