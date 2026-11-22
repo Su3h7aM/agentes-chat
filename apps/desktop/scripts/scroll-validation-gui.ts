@@ -113,10 +113,10 @@ function appDirs(root: string) {
   return {
     root,
     run: join(root, "AppRun"),
-    runner: join(root, "bin/agentes-runner"),
-    native: join(root, "lib/agentes.chat/server/native.js"),
-    lib: join(root, "lib"),
-    pkg: join(root, "lib/agentes.chat"),
+    runner: join(root, "usr/bin/agentes-runner"),
+    native: join(root, "usr/lib/agentes.chat/server/native.js"),
+    lib: join(root, "usr/lib"),
+    pkg: join(root, "usr/lib/agentes.chat"),
   };
 }
 
@@ -616,35 +616,57 @@ async function setupLocalApp(serverUrl: string) {
         "return { url: location.href, text: document.body?.innerText || '' };",
       )) as { url: string; text: string };
       if (state.url.startsWith(serverUrl)) return true;
-      if (clicked || !state.text.includes("Where will your workspace live?")) continue;
-      await execute(
-        'const b = [...document.querySelectorAll("button")].find((x) => x.innerText.includes("On this computer")); if (!b) throw new Error("On this computer is missing"); b.click(); return true;',
-      );
-      await sleep(400);
-      await execute(
-        'const b = [...document.querySelectorAll("button")].find((x) => x.innerText.includes("Get this computer ready")); if (!b) throw new Error("Get this computer ready is missing"); b.click(); return true;',
-      );
-      await sleep(400);
-      await execute(
-        String.raw`
-          const inputs = [...document.querySelectorAll('input')];
-          const set = (input, value) => {
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            setter.call(input, value);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-          };
-          if (inputs.length < 2) throw new Error('the setup inputs are missing');
-          set(inputs[0], 'Marina');
-          set(inputs[1], 'scroll@example.com');
-          const start = [...document.querySelectorAll('button')].find((x) => x.innerText.trim() === 'Start');
-          if (!start) throw new Error('Start is missing');
-          start.click();
-          return true;
-        `,
-      );
-      clicked = true;
-      log("started the AppImage local setup");
-      return true;
+      if (clicked) continue;
+      // Each stage is polled on its own: after "On this computer" the first
+      // screen is gone, so re-checking for it would stall. Check the owner
+      // form first so a re-poll after the earlier clicks lands here.
+      const startReady = (await execute(
+        `return {
+          inputs: document.querySelectorAll('input').length,
+          start: Boolean(
+            [...document.querySelectorAll('button')].find((x) => x.innerText.trim() === 'Start'),
+          ),
+        };`,
+      )) as { inputs: number; start: boolean };
+      if (startReady.start && startReady.inputs >= 2) {
+        await execute(
+          String.raw`
+            const inputs = [...document.querySelectorAll('input')];
+            const set = (input, value) => {
+              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              setter.call(input, value);
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            };
+            set(inputs[0], 'Marina');
+            set(inputs[1], 'scroll@example.com');
+            const start = [...document.querySelectorAll('button')].find((x) => x.innerText.trim() === 'Start');
+            if (!start) throw new Error('Start is missing');
+            start.click();
+            return true;
+          `,
+        );
+        clicked = true;
+        log("started the AppImage local setup");
+        return true;
+      }
+      const buttons = (await execute(
+        `return [...document.querySelectorAll('button')].map((x) => x.innerText);`,
+      )) as string[];
+      if (buttons.some((text) => text.includes("Get this computer ready"))) {
+        await execute(
+          'const b = [...document.querySelectorAll("button")].find((x) => x.innerText.includes("Get this computer ready")); if (!b) throw new Error("Get this computer ready is missing"); b.click(); return true;',
+        );
+        return null;
+      }
+      if (
+        state.text.includes("Where will your workspace live?") &&
+        buttons.some((text) => text.includes("On this computer"))
+      ) {
+        await execute(
+          'const b = [...document.querySelectorAll("button")].find((x) => x.innerText.includes("On this computer")); if (!b) throw new Error("On this computer is missing"); b.click(); return true;',
+        );
+        return null;
+      }
     }
     return null;
   });
@@ -656,7 +678,8 @@ async function main() {
   const extract = join(WORK, "extract");
   const home = join(WORK, "home");
   const data = join(home, ".agentes");
-  const dirs = appDirs(join(extract, "AppDir"));
+  // `--appimage-extract` unpacks to `squashfs-root` (older notes said `AppDir`).
+  const extractCandidates = [join(extract, "squashfs-root"), join(extract, "AppDir")];
 
   log(`extracting ${appimage}`);
   rmSync(extract, { recursive: true, force: true });
@@ -664,7 +687,14 @@ async function main() {
   mkdirSync(extract, { recursive: true });
   mkdirSync(join(home, ".agentes"), { recursive: true });
   await run([appimage, "--appimage-extract"], { cwd: extract, env: { HOME: home, PATH: process.env.PATH ?? "" } });
-  if (!existsSync(dirs.run) || !existsSync(dirs.native)) throw new Error(`unexpected AppImage layout at ${dirs.root}`);
+  const root = extractCandidates.find((candidate) => existsSync(join(candidate, "AppRun")));
+  if (!root) {
+    throw new Error(`unexpected AppImage layout: no AppRun under ${extractCandidates.join(" or ")}`);
+  }
+  const dirs = appDirs(root);
+  if (!existsSync(dirs.runner) || !existsSync(dirs.native)) {
+    throw new Error(`unexpected AppImage layout at ${dirs.root}`);
+  }
   if (webDir) {
     if (!existsSync(join(webDir, "index.html"))) throw new Error(`--web-dir has no index.html: ${webDir}`);
     const target = join(dirs.pkg, "web");
@@ -754,37 +784,35 @@ async function main() {
     await database.close();
   }
 
-  const wrapper = join(WORK, "launch.sh");
-  writeFileSync(
-    wrapper,
-    [
-      "#!/bin/bash",
-      "set -euo pipefail",
-      `export HOME=${JSON.stringify(home)}`,
-      `export XDG_CONFIG_HOME=${JSON.stringify(join(home, ".config"))}`,
-      `export XDG_DATA_HOME=${JSON.stringify(join(home, ".local/share"))}`,
-      `export XDG_CACHE_HOME=${JSON.stringify(join(home, ".cache"))}`,
-      `export XDG_RUNTIME_DIR=${JSON.stringify(join(home, "run"))}`,
-      `export DISPLAY=${JSON.stringify(process.env.DISPLAY || ":0")}`,
-      "unset WAYLAND_DISPLAY",
-      "export GDK_BACKEND=x11",
-      ...(cpu
-        ? [
-            "export WEBKIT_DISABLE_DMABUF_RENDERER=1",
-            "export WEBKIT_DISABLE_COMPOSITING_MODE=1",
-            "export LIBGL_ALWAYS_SOFTWARE=1",
-          ]
-        : []),
-      `exec ${JSON.stringify(dirs.run)}${cpu ? " --compatibility-mode" : ""}`,
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
+  // The extracted AppRun launches directly: tauri-driver inherits this
+  // process's environment for the app, so no temporary wrapper script is
+  // needed (and none is left behind in WORK).
+  const appEnv: Record<string, string> = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    ),
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_DATA_HOME: join(home, ".local/share"),
+    XDG_CACHE_HOME: join(home, ".cache"),
+    XDG_RUNTIME_DIR: join(home, "run"),
+    DISPLAY: process.env.DISPLAY || ":0",
+    GDK_BACKEND: "x11",
+    ...(cpu
+      ? {
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1",
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1",
+          LIBGL_ALWAYS_SOFTWARE: "1",
+        }
+      : {}),
+  };
+  delete appEnv.WAYLAND_DISPLAY;
   mkdirSync(join(home, "run"), { recursive: true, mode: 0o700 });
 
   driverPort = await freePort(port + 2);
   log(`starting tauri-driver on ${driverPort}`);
   driver = Bun.spawn([TAURI_DRIVER, "--port", String(driverPort), "--native-port", String(driverPort + 1)], {
+    env: appEnv,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -801,7 +829,9 @@ async function main() {
     capabilities: {
       alwaysMatch: {
         browserName: "wry",
-        "tauri:options": { application: wrapper },
+        "tauri:options": cpu
+          ? { application: dirs.run, args: ["--compatibility-mode"] }
+          : { application: dirs.run },
       },
     },
   });
