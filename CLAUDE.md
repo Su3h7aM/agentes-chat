@@ -49,7 +49,7 @@ Run lint, typecheck, the tests covering your change, and boundaries before decla
 
 Our design system (`docs/design/*`) stays original: never import a ui-sdk _component_ or stylesheet (`@ui-sdk/react/*`, `web.css`) — buttons, inputs, icons, menus and dialogs are ours, with Radix supplying the accessible shells for select/menu/dialog/tabs/popover. For a _behavior_ with no visual output, prefer the framework-free primitive from `@ui-sdk/core` (an `apps/web` dependency) over hand-rolling, when it owns an edge case we would otherwise repeat:
 
-- chat/log following → `createStickToBottom` (`OutputView` in `apps/web/src/components/LiveCode.tsx` is the pattern; never another `pinned` ref + ResizeObserver loop);
+- chat/log following → `createStickToBottom` (`OutputView` in `apps/web/src/components/LiveCode.tsx` is the pattern; never another `pinned` ref + ResizeObserver loop). The ChannelPage timeline is the exception: it keeps its own anchor/glide apparatus — row-anchored prepend, "layout scrolls never unpin", a glide held while the end grows — none of which the primitive expresses; do not migrate it;
 - screen-reader announcements → `announce` (never `aria-live` on a streaming region — it announces every mutation);
 - lists that render everything → `createVirtualizer` (with `findable` so ⌘F keeps working on unrendered rows);
 - arrow-navigated option lists → `createListbox` (disabled-aware, `keepInView`);
