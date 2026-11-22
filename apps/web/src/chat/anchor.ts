@@ -36,16 +36,130 @@ const SETTLE_MAX_FRAMES = 60;
 
 export function visibleAnchor(list: HTMLElement): VisibleAnchor | null {
   const box = list.getBoundingClientRect();
+  const rows = list.children;
+  const rects = new Map<number, DOMRect>();
+  const rectAt = (index: number) => {
+    let rect = rects.get(index);
+    if (!rect) {
+      const row = rows[index];
+      if (!row) throw new Error(`row ${index} is outside the list`);
+      rect = row.getBoundingClientRect();
+      rects.set(index, rect);
+    }
+    return rect;
+  };
+  const probes: { index: number; top: number; bottom: number }[] = [];
+  let ordered = true;
+  let low = 0;
+  let high = rows.length;
+  // Rows are laid out in DOM order: binary-search the first one ending below the top edge, then read only the rows
+  // in the visible window. A partially mocked or still unlaid list answers `0,0,0,0`, and rows may cross each other
+  // when heights change; either breaks the order the search relies on, so the probes below double as a check.
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    const rect = rectAt(middle);
+    if (!placed(rect)) {
+      ordered = false;
+      break;
+    }
+    probes.push({ index: middle, top: rect.top, bottom: rect.bottom });
+    if (rect.bottom > box.top) high = middle;
+    else low = middle + 1;
+  }
+  // A handful of evenly spaced rows certifies that the binary search saw the list's real order, not a shuffled or
+  // partly laid out one. The binary-search probes alone can step over a single inversion.
+  if (ordered && rows.length > 1) {
+    const step = Math.max(1, Math.floor(rows.length / 12));
+    for (let i = 0; i < rows.length; i += step) {
+      const rect = rectAt(i);
+      if (!placed(rect)) {
+        ordered = false;
+        break;
+      }
+      probes.push({ index: i, top: rect.top, bottom: rect.bottom });
+    }
+    if (ordered) {
+      const last = rectAt(rows.length - 1);
+      if (!placed(last)) ordered = false;
+      else probes.push({ index: rows.length - 1, top: last.top, bottom: last.bottom });
+    }
+  }
+  if (ordered) {
+    probes.sort((a, b) => a.index - b.index);
+    for (let i = 1; i < probes.length; i++) {
+      const previous = probes[i - 1];
+      const current = probes[i];
+      if (previous && current && (current.top < previous.top || current.bottom < previous.bottom)) {
+        ordered = false;
+        break;
+      }
+    }
+  }
+  if (ordered && low > 0) {
+    const before = rectAt(low - 1);
+    const after = low < rows.length ? rectAt(low) : null;
+    if (
+      !placed(before) ||
+      before.bottom > box.top ||
+      (after !== null && (!placed(after) || before.top > after.top || before.bottom > after.bottom))
+    ) {
+      ordered = false;
+    }
+  }
+
+  const found = visibleFrom(rows, box, ordered ? low : 0, ordered);
+  if (!found) return null;
+  if (ordered && found.index > 0) {
+    const before = rows[found.index - 1];
+    if (!before) return found.anchor;
+    const rect = before.getBoundingClientRect();
+    // A message above the one the search found is visible too: the search read a gap, not the front of the window.
+    if (before.classList.contains("ac-msg") && visible(rect, box))
+      return visibleFrom(rows, box, 0, false)?.anchor ?? null;
+  }
+  return found.anchor;
+}
+
+/** A rect the list is still laying out, or jsdom never placed, cannot order the rows. */
+function placed(rect: DOMRect): boolean {
+  return (
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.bottom) &&
+    rect.bottom >= rect.top &&
+    !(rect.top === 0 && rect.bottom === 0 && !rect.width && !rect.height)
+  );
+}
+
+/** The equality edges: a row ending exactly at the top edge, or starting at the bottom edge, is not visible. */
+function visible(rect: DOMRect, box: DOMRect): boolean {
+  return rect.bottom > box.top && rect.top < box.bottom;
+}
+
+function visibleFrom(
+  rows: HTMLCollection,
+  box: DOMRect,
+  from: number,
+  ordered: boolean,
+): { anchor: VisibleAnchor; index: number } | null {
   let first: VisibleAnchor | null = null;
-  for (const row of list.children) {
+  let firstIndex = -1;
+  for (let i = from; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
     if (row.classList.contains("channel__spacer")) continue;
     const rect = row.getBoundingClientRect();
-    if (rect.bottom <= box.top || rect.top >= box.bottom) continue;
+    if (!visible(rect, box)) {
+      if (ordered && rect.top >= box.bottom) break;
+      continue;
+    }
     const anchor = { row, top: rect.top - box.top };
-    if (row.classList.contains("ac-msg")) return anchor;
-    first ??= anchor;
+    if (row.classList.contains("ac-msg")) return { anchor, index: i };
+    if (!first) {
+      first = anchor;
+      firstIndex = i;
+    }
   }
-  return first;
+  return first ? { anchor: first, index: firstIndex } : null;
 }
 
 export function restoreAnchorPosition(list: HTMLElement, anchor: VisibleAnchor): RestoredAnchor | null {
