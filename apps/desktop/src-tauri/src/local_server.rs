@@ -23,14 +23,14 @@
 //! child counts as the server: it answers health and names its pid in `server.json` (in the folder only this
 //! person may write). Until then nothing gets the owner key, the computer's token or the main window's bridge.
 
-use std::collections::VecDeque;
-use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::collections::{HashMap, VecDeque};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -414,14 +414,23 @@ fn telemetry_on(value: Option<&str>) -> bool {
 
 /// The first port of the range nothing listens on.
 pub fn free_port() -> Option<u16> {
-    PORTS.into_iter().find(|p| port_free(*p))
+    first_free_port(PORTS, port_free)
+}
+
+fn first_free_port(
+    ports: impl IntoIterator<Item = u16>,
+    mut is_free: impl FnMut(u16) -> bool,
+) -> Option<u16> {
+    ports.into_iter().find(|port| is_free(*port))
 }
 
 /// Free as the server judges it (it exits 5 when something answers on 127.0.0.1 there), and bindable. A bind alone
 /// isn't enough: on a Mac, Rust's bind of 127.0.0.1 succeeds beside another program's `*:port` or `[::]:port`.
 fn port_free(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    std::net::TcpListener::bind(addr).is_ok() && TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_err()
+    let Ok(listener) = TcpListener::bind(addr) else { return false };
+    drop(listener);
+    TcpStream::connect_timeout(&addr, Duration::from_millis(120)).is_err()
 }
 
 // ───────────────────────────── the app's copies of the server ─────────────────────────────
@@ -563,41 +572,101 @@ pub fn http_within(port: u16, method: &str, path: &str, body: Option<&Value>, re
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
     stream.set_read_timeout(Some(read)).ok()?;
-    let body = body.map(Value::to_string).unwrap_or_default();
-    let request = format!(
+    let body = body.map(serde_json::to_vec).transpose().ok()?.unwrap_or_default();
+    let mut request = Vec::with_capacity(256 + body.len());
+    write!(
+        request,
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut raw = Vec::new();
-    stream.take(4 * 1024 * 1024).read_to_end(&mut raw).ok()?;
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
-    let head = String::from_utf8_lossy(&raw[..split]);
-    let rest = &raw[split + 4..];
-    let status = head.split_whitespace().nth(1)?.parse().ok()?;
-    let chunked = head.lines().any(|l| {
-        let l = l.to_ascii_lowercase();
-        l.starts_with("transfer-encoding:") && l.contains("chunked")
-    });
-    let body = if chunked { dechunk(rest) } else { rest.to_vec() };
+    )
+    .ok()?;
+    request.extend_from_slice(&body);
+    stream.write_all(&request).ok()?;
+
+    let mut reader = BufReader::new(stream);
+    let (status, content_length, chunked) = read_http_headers(&mut reader)?;
+    let body = if chunked {
+        read_chunked(&mut reader)?
+    } else if let Some(length) = content_length {
+        if length > 4 * 1024 * 1024 {
+            return None;
+        }
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).ok()?;
+        body
+    } else {
+        let mut body = Vec::new();
+        reader.take(4 * 1024 * 1024).read_to_end(&mut body).ok()?;
+        body
+    };
+    let _: Value = serde_json::from_slice(&body).ok()?;
     Some((status, String::from_utf8_lossy(&body).into_owned()))
 }
 
-/// A chunked body, by bytes: chunk sizes count bytes, which may end inside a character.
-fn dechunk(mut rest: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    while let Some(end) = rest.windows(2).position(|w| w == b"\r\n") {
-        let size = std::str::from_utf8(&rest[..end]).ok().and_then(|s| s.split(';').next());
-        let Some(n) = size.and_then(|s| usize::from_str_radix(s.trim(), 16).ok()) else { break };
-        let after = &rest[end + 2..];
-        if n == 0 || after.len() < n {
+fn read_http_headers(reader: &mut impl BufRead) -> Option<(u16, Option<usize>, bool)> {
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line).ok()?;
+    let status = std::str::from_utf8(&line).ok()?.split_whitespace().nth(1)?.parse().ok()?;
+    let (mut content_length, mut chunked) = (None, false);
+    let mut total = line.len();
+    loop {
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line).ok()?;
+        if count == 0 {
+            return None;
+        }
+        total += count;
+        if total > 4 * 1024 * 1024 {
+            return None;
+        }
+        if line == b"\r\n" || line == b"\n" {
             break;
         }
-        out.extend_from_slice(&after[..n]);
-        rest = after[n..].strip_prefix(b"\r\n").unwrap_or(&after[n..]);
+        let line = line.strip_suffix(b"\n").unwrap_or(&line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else { continue };
+        let (name, value) = (
+            &line[..colon],
+            std::str::from_utf8(&line[colon + 1..]).ok()?.trim(),
+        );
+        if name.eq_ignore_ascii_case(b"content-length") {
+            content_length = value.parse().ok();
+        } else if name.eq_ignore_ascii_case(b"transfer-encoding") {
+            chunked = value
+                .as_bytes()
+                .windows(7)
+                .any(|part| part.eq_ignore_ascii_case(b"chunked"));
+        }
     }
-    out
+    Some((status, content_length, chunked))
+}
+
+fn read_chunked(reader: &mut impl BufRead) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        reader.read_until(b'\n', &mut line).ok()?;
+        let line = line.strip_suffix(b"\n").unwrap_or(&line);
+        let size = line.strip_suffix(b"\r").unwrap_or(line);
+        let size = std::str::from_utf8(size).ok()?.split(';').next()?;
+        let size = usize::from_str_radix(size.trim(), 16).ok()?;
+        if size == 0 {
+            return Some(out);
+        }
+        if out.len().checked_add(size)? > 4 * 1024 * 1024 {
+            return None;
+        }
+        let start = out.len();
+        out.resize(start + size, 0);
+        reader.read_exact(&mut out[start..]).ok()?;
+        let mut crlf = [0; 2];
+        reader.read_exact(&mut crlf).ok()?;
+        if crlf != *b"\r\n" {
+            return None;
+        }
+    }
 }
 
 pub fn healthy(port: u16) -> bool {
@@ -1279,6 +1348,11 @@ pub struct BackupFile {
 }
 
 fn system_name() -> Option<String> {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+    NAME.get_or_init(system_name_uncached).clone()
+}
+
+fn system_name_uncached() -> Option<String> {
     #[cfg(target_os = "macos")]
     let out = Command::new("id").arg("-F").output().ok()?;
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -2435,7 +2509,17 @@ fn format_stamp(year: i32, mon: i32, mday: i32, hour: i32, min: i32, sec: i32) -
 
 /// The backups `backup` wrote in `dir` (`agentes-*.tar.gz`), newest first. Only those: the "Copy to" folder is the
 /// person's own and may hold anything else.
+type CachedBackupFiles = HashMap<PathBuf, (SystemTime, Vec<(SystemTime, PathBuf)>)>;
+
 fn backup_files(dir: &Path) -> Vec<(SystemTime, PathBuf)> {
+    static CACHE: OnceLock<Mutex<CachedBackupFiles>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let modified = fs::metadata(dir).and_then(|metadata| metadata.modified()).ok();
+    if let Some(modified) = modified {
+        if let Some((_, files)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(dir).filter(|(mtime, _)| *mtime == modified) {
+            return files.clone();
+        }
+    }
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     let mut files: Vec<(SystemTime, PathBuf)> = entries
         .flatten()
@@ -2446,7 +2530,21 @@ fn backup_files(dir: &Path) -> Vec<(SystemTime, PathBuf)> {
         .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), e.path()))
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
+    // Directory mtime changes invalidate names and timestamps; backup writes finish by renaming files into it.
+    if let Some(modified) = modified {
+        cache.lock().unwrap_or_else(|e| e.into_inner()).insert(dir.to_path_buf(), (modified, files.clone()));
+    }
     files
+}
+
+fn read_tail(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let length = file.seek(SeekFrom::End(0))?;
+    let tail_length = length.min(limit as u64);
+    file.seek(SeekFrom::End(-(tail_length as i64)))?;
+    let mut tail = Vec::with_capacity(tail_length as usize);
+    file.read_to_end(&mut tail)?;
+    Ok(tail)
 }
 
 /// The new backup copied to the "Copy to" folder too (under a temporary name until it's whole), where the two
@@ -2602,11 +2700,8 @@ fn diagnostics(app: &AppHandle) -> String {
     let status = status(app, false);
     let lines = state(app).lines.iter().cloned().collect::<Vec<_>>().join("\n");
     let log = folder(app)
-        .and_then(|f| fs::read(f.log()).ok())
-        .map(|bytes| {
-            let tail = &bytes[bytes.len().saturating_sub(16 * 1024)..];
-            String::from_utf8_lossy(tail).into_owned()
-        })
+        .and_then(|f| read_tail(&f.log(), 16 * 1024).ok())
+        .map(|tail| String::from_utf8_lossy(&tail).into_owned())
         .unwrap_or_default();
     format!(
         "agentes.chat app {} ({} {})\nserver here: {:?}, installed package version {}, internal server version {}, at {}, reach {}, usage statistics {}\n\n{}\n\n{}",
@@ -3685,6 +3780,17 @@ mod tests {
     }
 
     #[test]
+    fn free_port_probes_in_preference_order_and_stops_at_the_first_free_port() {
+        let mut probed = Vec::new();
+        let selected = first_free_port([4310, 4311, 4312, 4313], |port| {
+            probed.push(port);
+            port == 4312
+        });
+        assert_eq!(selected, Some(4312));
+        assert_eq!(probed, [4310, 4311, 4312]);
+    }
+
+    #[test]
     fn usage_off_as_the_server_reads_it() {
         assert!(telemetry_on(None));
         assert!(telemetry_on(Some("on")));
@@ -3742,16 +3848,17 @@ mod tests {
 
     #[test]
     fn http_reads_plain_and_chunked_bodies() {
-        assert_eq!(dechunk(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"), b"hello world");
-        // Sizes count bytes: a chunk may end inside a character, and a crafted one never panics.
-        assert_eq!(dechunk("1\r\n\u{e9}\r\n0\r\n\r\n".as_bytes()), vec![0xc3]);
-        assert_eq!(dechunk(b"1\r\n\xc3\r\n1\r\n\xa9\r\n0\r\n\r\n"), "\u{e9}".as_bytes());
-        assert_eq!(dechunk(b"zz\r\nhello\r\n"), b"");
+        assert_eq!(read_chunked(&mut BufReader::new(&b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"[..])).unwrap(), b"hello world");
+        // Chunk sizes count bytes, so a chunk can end inside a character.
+        assert_eq!(
+            read_chunked(&mut BufReader::new(&b"1\r\n\xc3\r\n1\r\n\xa9\r\n0\r\n\r\n"[..])).unwrap(),
+            "\u{e9}".as_bytes()
+        );
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
             for reply in [
-                "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}",
+                "HTTP/1.1 200 OK\r\ncontent-length: 15\r\n\r\n{\"status\":\"ok\"}",
                 "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nb\r\n{\"token\":1}\r\n0\r\n\r\n",
             ] {
                 let (mut s, _) = listener.accept().unwrap();
@@ -3764,6 +3871,27 @@ mod tests {
         assert_eq!(http(port, "GET", "/api/health", None), Some((200, "{\"status\":\"ok\"}".into())));
         assert_eq!(http(port, "POST", "/x", Some(&json!({}))), Some((200, "{\"token\":1}".into())));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn http_headers_match_content_length_name_case_insensitively() {
+        let response = b"HTTP/1.1 200 OK\r\ncOnTeNt-LeNgTh: 2\r\n\r\n{}";
+        let (status, length, chunked) = read_http_headers(&mut BufReader::new(&response[..])).unwrap();
+        assert_eq!((status, length, chunked), (200, Some(2), false));
+    }
+
+    #[test]
+    fn log_tail_reads_the_whole_short_file_and_exact_tail_lengths() {
+        let root = temp("tail");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("log");
+        fs::write(&path, b"small").unwrap();
+        assert_eq!(read_tail(&path, 8).unwrap(), b"small");
+        fs::write(&path, b"12345678").unwrap();
+        assert_eq!(read_tail(&path, 8).unwrap(), b"12345678");
+        fs::write(&path, b"0123456789").unwrap();
+        assert_eq!(read_tail(&path, 8).unwrap(), b"23456789");
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// The real server, end to end, as the app runs it: `AGENTES_TEST_RUNNER` (the runner compiled with
