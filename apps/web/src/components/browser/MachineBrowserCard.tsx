@@ -15,7 +15,7 @@ import { useQueries } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useToast } from "@/lib/toast";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { AgentAvatar } from "../AgentAvatar";
 import { ToolOffWayOut } from "../devices/ToolOneClick";
 import { CommandBlock } from "../machine-bits";
@@ -61,12 +61,15 @@ export function MachineBrowserCard({ machine: m, onTurnOff }: { machine: Machine
   });
   // Agents at work whose latest call is in the browser, from the live store: between two calls the run
   // has no current tool, and while it works its status reads "thinking", so neither alone says it.
-  const busy = useStreams((s) =>
-    Object.values(s.runs)
-      .filter((r) => agentIds.includes(r.agentId) && agentStateOfRun(r) !== "idle" && usesBrowser(r))
-      .map((r) => r.agentId)
-      .sort()
-      .join(","),
+  const busy = useStreams(
+    (s) =>
+      Object.values(s.runs)
+        .filter((r) => agentIds.includes(r.agentId) && agentStateOfRun(r) !== "idle" && usesBrowser(r))
+        .map((r) => r.agentId)
+        .sort()
+        .join(","),
+    undefined,
+    agentIds.map((id) => liveTopics.agentRuns(id)),
   );
   const access = m.access;
   if (!access && !m.browser) return null;

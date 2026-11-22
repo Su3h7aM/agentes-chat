@@ -466,6 +466,7 @@ import { reportPainted } from "@/lib/perf";
 import { useToast } from "@/lib/toast";
 import { useValueStore } from "@/lib/value-store";
 import {
+  liveTopics,
   useChannelRealtime,
   useDismissRun,
   useLive,
@@ -999,11 +1000,14 @@ function ChannelView({
   // Stopping is immediate, nothing asked (what it did stays, "Continuar" picks it up): the composer's
   // button when the box is empty, or Esc anywhere on the page (composer empty, nothing open).
   const { canStop: mayStop, stop: stopRun } = useStopRun();
-  const stoppableKey = useStreams((s) =>
-    scopedRuns(s)
-      .filter((r) => isStoppable(r) && !r.stopping)
-      .map((r) => r.runId)
-      .join(" "),
+  const stoppableKey = useStreams(
+    (s) =>
+      scopedRuns(s)
+        .filter((r) => isStoppable(r) && !r.stopping)
+        .map((r) => r.runId)
+        .join(" "),
+    undefined,
+    [liveTopics.channelRuns(channel.id), liveTopics.runs],
   );
   /** The most recent run at work here (anyone writing chooses "Juntar" or "Parar e mandar" for it). */
   const busyTarget = stoppableKey
@@ -1623,11 +1627,14 @@ function ChannelView({
 
   // The agents' blocks (one per run, from "pensando" to its final message: `chat/run-slots.ts`), at the end. They
   // change when runs start or end, never on another of a run's events.
-  const liveRunsKey = useStreams((s) =>
-    scopedRuns(s)
-      .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
-      .map((r) => `${r.runId}\t${r.agentId}\t${r.provisional ? 1 : 0}`)
-      .join("\n"),
+  const liveRunsKey = useStreams(
+    (s) =>
+      scopedRuns(s)
+        .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+        .map((r) => `${r.runId}\t${r.agentId}\t${r.provisional ? 1 : 0}`)
+        .join("\n"),
+    undefined,
+    [liveTopics.channelRuns(channel.id), liveTopics.runs],
   );
   const landedRuns = useMemo(
     () =>
@@ -2785,12 +2792,15 @@ function ChannelView({
     () => unseenOf(timeline, unseenFrom, me.user.id, myHandle),
     [timeline, unseenFrom, me.user.id, myHandle],
   );
-  const writingAgents = useStreams((s) =>
-    scopedRuns(s)
-      .filter((r) => r.status === "running")
-      .map((r) => r.agentId)
-      .filter((id, i, all) => all.indexOf(id) === i)
-      .join(" "),
+  const writingAgents = useStreams(
+    (s) =>
+      scopedRuns(s)
+        .filter((r) => r.status === "running")
+        .map((r) => r.agentId)
+        .filter((id, i, all) => all.indexOf(id) === i)
+        .join(" "),
+    undefined,
+    [liveTopics.channelRuns(channel.id), liveTopics.runs],
   );
   const pillOn = unseenFrom !== null || unseenRun;
   const pillWriting = pillOn && writingAgents ? writingAgents.split(" ") : [];
@@ -4020,14 +4030,17 @@ const Timeline = memo(function Timeline({
     return out;
   }, [items]);
   // Every agent at work has its block; the ones still waiting for their first words stay last.
-  const waitingKey = useStreams((s) =>
-    slots
-      .filter((x) => {
-        const r = s.runs[x.runId];
-        return r && waitsForWords(r);
-      })
-      .map((x) => x.runId)
-      .join(" "),
+  const waitingKey = useStreams(
+    (s) =>
+      slots
+        .filter((x) => {
+          const r = s.runs[x.runId];
+          return r && waitsForWords(r);
+        })
+        .map((x) => x.runId)
+        .join(" "),
+    undefined,
+    [liveTopics.runs, ...slots.map((x) => liveTopics.run(x.runId))],
   );
   const drawn = useMemo(() => {
     const waiting = new Set(waitingKey.split(" "));
@@ -4256,7 +4269,7 @@ function RunBlock({
   answer?: boolean;
   relay?: RelayedAnswer<MessageType>;
 }) {
-  const run = useStreams((s) => (message ? undefined : s.runs[runId]));
+  const run = useStreams((s) => (message ? undefined : s.runs[runId]), undefined, [liveTopics.run(runId)]);
   const last = useRef<LiveRun | undefined>(undefined);
   if (run) last.current = run;
   const live = message ? undefined : (run ?? last.current);
@@ -4305,7 +4318,7 @@ function LiveNotices({ channelId }: { channelId: string }) {
   const { t } = useTranslation();
   const { org } = useOrg();
   const dir = useDirectory(org.id);
-  const notices = useLive((s) => s.notices[channelId]);
+  const notices = useLive((s) => s.notices[channelId], undefined, [liveTopics.noticesIn(channelId)]);
   if (!notices?.length) return null;
   return (
     <>
@@ -4326,7 +4339,7 @@ function LiveMemoryCards({ channelId }: { channelId: string }) {
   const { t } = useTranslation();
   const { org } = useOrg();
   const dir = useDirectory(org.id);
-  const cards = useLive((s) => s.memory[channelId]);
+  const cards = useLive((s) => s.memory[channelId], undefined, [liveTopics.memoryIn(channelId)]);
   return (
     <>
       {(cards ?? []).map((c) => {
@@ -4641,9 +4654,11 @@ function useWorkHere({ channelId, threadId, visible, pendingAsks, consultBlocks,
   const { t } = useTranslation();
   const { org, me } = useOrg();
   const dir = useDirectory(org.id);
-  const all = useStreams((s) => runsInChannel(s, channelId).filter((r) => visible?.current(r) ?? true), sameRuns);
+  const all = useStreams((s) => runsInChannel(s, channelId).filter((r) => visible?.current(r) ?? true), sameRuns, [
+    liveTopics.channelRuns(channelId),
+  ]);
   const runs = all.filter((r) => r.status !== "failed");
-  const typing = useLive((s) => s.typing[channelId]);
+  const typing = useLive((s) => s.typing[channelId], undefined, [liveTopics.typingIn(channelId)]);
   // Ticks while someone is on it (a question out counts: seen on the last render).
   const asking = useRef(false);
   const now = useSecond(runs.length > 0 || Boolean(typing) || asking.current);
@@ -4651,6 +4666,7 @@ function useWorkHere({ channelId, threadId, visible, pendingAsks, consultBlocks,
   const heard = useLive(
     (s) => consultsIn(s.consults, channelId, now).filter((c) => visible?.current(c) ?? true),
     sameList,
+    [liveTopics.consultsIn(channelId)],
   );
   // A reply near the end shows its questions with where each is and its clock: the asker's own work stays here. Work
   // handed off (ADR 0095 addendum) stays for as long as it is out, wherever its divider is, unless its line under the

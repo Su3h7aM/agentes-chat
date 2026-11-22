@@ -31,7 +31,7 @@ import { ReportProblem, useProblemReports } from "@/components/ReportProblem";
 import type { Directory } from "@/hooks/useDirectory";
 import { STORAGE_KEYS, sessionStore } from "@/lib/storage";
 import { useToast } from "@/lib/toast";
-import { useLive } from "@/realtime/context";
+import { liveTopics, useLive } from "@/realtime/context";
 import { CallAgentMenu, useChannelActions } from "./channel-actions";
 import { useOrg } from "./org-context";
 
@@ -153,7 +153,7 @@ export function MessageReceipts({
   const held = usePlanHold() !== null;
   const steerId = useId();
   const [retrying, setRetrying] = useState(false);
-  const receipt = useLive((s) => s.receipts[message.id]);
+  const receipt = useLive((s) => s.receipts[message.id], undefined, [liveTopics.receipt(message.id)]);
   // The pills' list (live through `message.reactions`), else the message's: an agent's reaction is its answer.
   const reactions = useReactions(org.id, message.id, false).data ?? message.reactions;
   const steer = useSteerState(org.id, message.channelId, part === "check" ? message.id : "");
@@ -173,7 +173,11 @@ export function MessageReceipts({
   const failedAgent = status?.kind === "failed" && status.agents.length === 1 ? status.agents[0] : undefined;
   const failedRun = failedAgent ? receipt?.runOf?.[failedAgent] : undefined;
   const reports = useProblemReports();
-  const rowSaysWhy = useLive((s) => (failedRun ? s.streams.runs[failedRun]?.status === "failed" : false));
+  const rowSaysWhy = useLive(
+    (s) => (failedRun ? s.streams.runs[failedRun]?.status === "failed" : false),
+    undefined,
+    failedRun ? [liveTopics.run(failedRun)] : [liveTopics.runs],
+  );
   const callAgent =
     actions && actions.channelAgents.length > 0 ? (
       <ReceiptAction>

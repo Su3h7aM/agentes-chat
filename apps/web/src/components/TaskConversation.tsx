@@ -8,7 +8,7 @@ import { useOrg } from "@/components/org-context";
 import { ThreadLineBody } from "@/components/threads/ThreadLines";
 import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { ThreadPage } from "@/pages/ThreadPage";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import "@/components/threads/threads.css";
 
 /*
@@ -19,7 +19,11 @@ import "@/components/threads/threads.css";
 /** Someone's turn is live in its conversation now (the card's `working` lags until it refetches). */
 export function useTaskLive(issue: Pick<Issue, "conversation">) {
   const channelId = issue.conversation?.channelId;
-  const live = useStreams((s) => (channelId ? runsInChannel(s, channelId).length > 0 : false));
+  const live = useStreams(
+    (s) => (channelId ? runsInChannel(s, channelId).length > 0 : false),
+    undefined,
+    channelId ? [liveTopics.channelRuns(channelId)] : undefined,
+  );
   return Boolean(issue.conversation?.working) || live;
 }
 

@@ -21,7 +21,7 @@ import { useSeat } from "@agenteschat/client/lib/seat-context";
 import { useQuery } from "@tanstack/react-query";
 import { useOrg } from "@/components/org-context";
 import { useMyRoleIds } from "@/hooks/useMyRoleIds";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 
 /** Outside the agent's conversations no event says when its request changes: it's asked again this often. */
 const HANDOFF_POLL_MS = 30_000;
@@ -34,8 +34,14 @@ function useScreenRun(agentId: string): LiveRun | undefined {
     (s) =>
       Object.values(s.runs).find((r) => r.agentId === agentId && agentStateOfRun(r) !== "idle" && usesScreen(r))
         ?.runId ?? "",
+    undefined,
+    [liveTopics.agentRuns(agentId)],
   );
-  return useStreams((s) => (runId ? s.runs[runId] : undefined));
+  return useStreams(
+    (s) => (runId ? s.runs[runId] : undefined),
+    undefined,
+    runId ? [liveTopics.run(runId)] : [liveTopics.runs],
+  );
 }
 
 /**

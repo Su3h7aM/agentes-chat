@@ -57,7 +57,7 @@ import { agentLine, useAgentPresence } from "@/hooks/usePresence";
 import { useWindowActive } from "@/hooks/useWindowActive";
 import { useToast } from "@/lib/toast";
 import { hasFired, isDoneOnce, routineTitle, useRoutineControls, useWhen } from "@/pages/RoutinesPage";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import "./agent-sidebar.css";
 
 /** While the sidebar shows, whether its screen started or stopped is asked again this often. */
@@ -186,7 +186,7 @@ function Section({
 function AgentHead({ agent }: { agent: Agent }) {
   const { t, i18n } = useTranslation();
   const shown = useAgentPresence(agent.id);
-  const busy = useStreams((s) => agentStateIn(s, agent.id) !== "idle");
+  const busy = useStreams((s) => agentStateIn(s, agent.id) !== "idle", undefined, [liveTopics.agentRuns(agent.id)]);
   const line = agentLine(t, shown?.line ?? null, i18n.language);
   const word = busy ? t("team.workingNow") : shown ? agentFaceWord(t, shown.presence) : null;
   // The right hand's one role name, as the sidebar and its DM's header say it.

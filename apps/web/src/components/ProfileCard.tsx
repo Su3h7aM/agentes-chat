@@ -80,7 +80,7 @@ import { entityMenu } from "@/lib/entity-menu";
 import { planMeterText, usageShown } from "@/lib/plan-usage";
 import { useToast } from "@/lib/toast";
 import { AskAccessButton } from "@/pages/agent/PublicCard";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { useAgentMenu, usePersonMenu } from "./entity-menus";
 import "./profile-card.css";
 
@@ -624,7 +624,7 @@ function AgentCardBody({ agent, onDone }: { agent: Agent; onDone: () => void }) 
   // Its presence from its work and its line (ADR 0084): its own words or what it is doing now, and where.
   const shown = useAgentPresence(agent.id);
   const line = agentLine(t, shown?.line ?? null, i18n.language);
-  const workingIn = useStreams((s) => agentWorkingIn(s, agent.id));
+  const workingIn = useStreams((s) => agentWorkingIn(s, agent.id), undefined, [liveTopics.agentRuns(agent.id)]);
   const busy = workingIn !== null;
   const here = workingIn ? channels?.find((c) => c.id === workingIn)?.name : undefined;
   const openConversation = useOpenConversation();

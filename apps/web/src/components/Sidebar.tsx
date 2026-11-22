@@ -147,7 +147,7 @@ import { rightHandSeen, STORAGE_KEYS, sessionStore, storage, storedStrings } fro
 import { useToast } from "@/lib/toast";
 import { offersNewWorkspace, type WorkspaceGroup } from "@/lib/workspaces";
 import type { SettingsSection } from "@/pages/settings-sections";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { AgentAvatar } from "./AgentAvatar";
 import {
   DeleteGroupDialog,
@@ -367,7 +367,7 @@ export function Sidebar() {
 
   // Who works now: a run this tab hears, or the agents' list (work handed off in two agents' DM too). Who waits on
   // someone or is in line: a closed group still shows them.
-  const busyKey = useStreams((st) => [...runningAgents(st)].sort().join());
+  const busyKey = useStreams((st) => [...runningAgents(st)].sort().join(), undefined, [liveTopics.runs]);
   const { busy, waits } = useMemo(() => {
     const work = workKey ? workKey.split(",").map((w) => w.split(":") as [string, string]) : [];
     return {
@@ -1728,8 +1728,8 @@ function AgentRow({
 }) {
   const { t, i18n } = useTranslation();
   const { org, me } = useOrg();
-  const state = useStreams((st) => agentStateIn(st, a.id));
-  const workingIn = useStreams((st) => agentWorkingIn(st, a.id));
+  const state = useStreams((st) => agentStateIn(st, a.id), undefined, [liveTopics.agentRuns(a.id)]);
+  const workingIn = useStreams((st) => agentWorkingIn(st, a.id), undefined, [liveTopics.agentRuns(a.id)]);
   // Its presence from its work and its line (ADR 0084): the badge on its face, both in the row's title (no emoji in
   // the list: the line shows where the agent is opened).
   const shown = useAgentPresence(a.id);

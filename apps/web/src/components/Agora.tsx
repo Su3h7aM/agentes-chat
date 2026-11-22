@@ -48,7 +48,7 @@ import { RowName, StopAllInline, useOpenTask, useProgramText, useTaskStop } from
 import { useDirectory } from "@/hooks/useDirectory";
 import { useNow } from "@/hooks/useNow";
 import { useToast } from "@/lib/toast";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import "./agora.css";
 
 /*
@@ -72,7 +72,7 @@ export function AgoraButton({ below = false, className }: { below?: boolean; cla
   const statuses = useAgentStatuses(org.id).data;
   const waitingOnMe = useNotificationCount(org.id).data?.waiting ?? 0;
   // A run this tab hears at work, before the agents' list says so.
-  const liveKey = useStreams((st) => [...runningAgents(st)].sort().join());
+  const liveKey = useStreams((st) => [...runningAgents(st)].sort().join(), undefined, [liveTopics.runs]);
   const glyph = useMemo(
     () => agoraGlyph(statuses, waitingOnMe, new Set(liveKey ? liveKey.split(",") : [])),
     [statuses, waitingOnMe, liveKey],

@@ -172,6 +172,126 @@ export interface LiveMemoryCard {
 export const PROVISIONAL_TTL_MS = 20_000;
 
 /**
+ * Topic-keyed subscriptions (the store's fan-out control).
+ *
+ * A loaded channel holds ~300 rows with ~4-5 subscribers each, so notifying every listener on every event is
+ * O(rows x runs) of main-thread churn while agents stream. Listeners instead name the topics they depend on and
+ * only those fire: an `agent.tool.output` chunk touches one run, so it wakes that run's row, not the receipts or
+ * typing subscribers of every other row.
+ *
+ * Topics mirror what the store touches, derived from reference changes in `diffLiveTopics` (never from the event
+ * type, so a new event that reuses the same slices stays correct):
+ * - `runs` (any run added, removed, or changed at status level) and `runs:<runId>` (anything about that run,
+ *   including output/work-only appends), `channel:<channelId>` (that channel's run list changed) and
+ *   `agent:<agentId>` (that agent's aggregate state changed at status level);
+ * - `receipts` / `receipts:<messageId>`, `typing` / `typing:<channelId>`;
+ * - `questions` / `questions:<id>`, `secrets` / `secrets:<id>`;
+ * - `memory` / `memory:<channelId>`, `notices` / `notices:<channelId>`;
+ * - `continued` / `continued:<runId>`, `consults` / `consults:<channelId>`.
+ *
+ * No listener may miss an event it would have received before: subscribing with no topics (or an empty list) is a
+ * general subscription and fires on every change, exactly as before. Anything not yet topic-mapped keeps that.
+ */
+export type LiveTopic = string;
+
+export const liveTopics = {
+  runs: "runs",
+  run: (runId: string): LiveTopic => `runs:${runId}`,
+  channelRuns: (channelId: string): LiveTopic => `channel:${channelId}`,
+  agentRuns: (agentId: string): LiveTopic => `agent:${agentId}`,
+  receipts: "receipts",
+  receipt: (messageId: string): LiveTopic => `receipts:${messageId}`,
+  typing: "typing",
+  typingIn: (channelId: string): LiveTopic => `typing:${channelId}`,
+  questions: "questions",
+  question: (id: string): LiveTopic => `questions:${id}`,
+  secrets: "secrets",
+  secret: (id: string): LiveTopic => `secrets:${id}`,
+  memory: "memory",
+  memoryIn: (channelId: string): LiveTopic => `memory:${channelId}`,
+  notices: "notices",
+  noticesIn: (channelId: string): LiveTopic => `notices:${channelId}`,
+  continued: "continued",
+  continuedRun: (runId: string): LiveTopic => `continued:${runId}`,
+  consults: "consults",
+  consultsIn: (channelId: string): LiveTopic => `consults:${channelId}`,
+};
+
+/** A run change that only appends content (output/work) or refreshes clocks: no avatar, list key or receipt reads it. */
+const NARROW_RUN_FIELDS = new Set(["work", "output", "lastEventAt", "workingSince", "startedAt", "since"]);
+
+function diffRunTopics(prev: LiveState["streams"], next: LiveState["streams"], out: Set<LiveTopic>) {
+  if (prev === next) return;
+  const before = prev.runs;
+  const after = next.runs;
+  let broad = prev.finished !== next.finished || prev.landing !== next.landing || prev.background !== next.background;
+  const ids = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const id of ids) {
+    const a = before[id];
+    const b = after[id];
+    if (a === b) continue;
+    const channelId = b?.channelId ?? a?.channelId;
+    const agentId = b?.agentId ?? a?.agentId;
+    out.add(liveTopics.run(id));
+    if (channelId) out.add(liveTopics.channelRuns(channelId));
+    if (!a || !b) {
+      broad = true;
+      if (agentId) out.add(liveTopics.agentRuns(agentId));
+      continue;
+    }
+    // Narrow (a streaming chunk touched only this run's content) vs broad (status-level: lists and avatars read it).
+    let narrow = true;
+    for (const k of Object.keys({ ...a, ...b }) as (keyof typeof a)[]) {
+      if (Object.is(a[k], b[k])) continue;
+      if (!NARROW_RUN_FIELDS.has(k as string)) {
+        narrow = false;
+        break;
+      }
+    }
+    if (!narrow) {
+      broad = true;
+      if (agentId) out.add(liveTopics.agentRuns(agentId));
+    }
+  }
+  if (broad) out.add(liveTopics.runs);
+}
+
+function diffKeyedTopics<T>(
+  prev: Record<string, T>,
+  next: Record<string, T>,
+  bare: LiveTopic,
+  keyed: (key: string) => LiveTopic,
+  out: Set<LiveTopic>,
+) {
+  if (prev === next) return;
+  out.add(bare);
+  const ids = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const id of ids) if (prev[id] !== next[id]) out.add(keyed(id));
+}
+
+/** Which topics a state transition touched, by reference (empty only when nothing changed). */
+function diffLiveTopics(prev: LiveState, next: LiveState): Set<LiveTopic> {
+  const out = new Set<LiveTopic>();
+  diffRunTopics(prev.streams, next.streams, out);
+  diffKeyedTopics(prev.receipts, next.receipts, liveTopics.receipts, liveTopics.receipt, out);
+  diffKeyedTopics(prev.typing, next.typing, liveTopics.typing, liveTopics.typingIn, out);
+  diffKeyedTopics(prev.questions, next.questions, liveTopics.questions, liveTopics.question, out);
+  diffKeyedTopics(prev.secrets, next.secrets, liveTopics.secrets, liveTopics.secret, out);
+  diffKeyedTopics(prev.memory, next.memory, liveTopics.memory, liveTopics.memoryIn, out);
+  diffKeyedTopics(prev.notices, next.notices, liveTopics.notices, liveTopics.noticesIn, out);
+  diffKeyedTopics(prev.continued, next.continued, liveTopics.continued, liveTopics.continuedRun, out);
+  if (prev.consults !== next.consults) {
+    out.add(liveTopics.consults);
+    const ids = new Set([...Object.keys(prev.consults), ...Object.keys(next.consults)]);
+    for (const id of ids) {
+      const c = next.consults[id] ?? prev.consults[id];
+      if (prev.consults[id] !== next.consults[id] && c) out.add(liveTopics.consultsIn(c.channelId));
+    }
+  }
+  return out;
+}
+
+/**
  * The agent's message carries its memory cards (`meta.memoryUpdates`): drop the live ones it shows. From the event
  * when it carries the message, else from the HTTP read that follows (a big message's event comes without it).
  * The same object when nothing was dropped.
@@ -205,17 +325,42 @@ export function createStreamsStore(
     continued: {},
     consults: {},
   };
-  const listeners = new Set<() => void>();
-  const notify = () => {
-    for (const l of listeners) l();
+  // `null` topics: a general subscription, fired by every change (the fallback for anything not topic-mapped).
+  const listeners = new Map<() => void, Set<LiveTopic> | null>();
+  const notifyTopics = (topics: Set<LiveTopic> | "all") => {
+    for (const [l, subs] of listeners) {
+      if (topics === "all" || subs === null) {
+        l();
+        continue;
+      }
+      for (const t of subs) {
+        if (topics.has(t)) {
+          l();
+          break;
+        }
+      }
+    }
   };
   // Streaming deltas arrive many times a frame: their notifications wait for the next frame (one render
   // per frame, `get()` is always current). Anything else notifies at once, with whatever was waiting.
   let frame: number | null = null;
-  const flush = () => {
+  let pending: Set<LiveTopic> | null = null;
+  let pendingAll = false;
+  const flush = (topics: Set<LiveTopic> | "all" = "all") => {
     if (frame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
     frame = null;
-    notify();
+    if (topics === "all" || pendingAll) {
+      pending = null;
+      pendingAll = false;
+      notifyTopics("all");
+      return;
+    }
+    const merged = new Set(pending ?? []);
+    pending = null;
+    for (const t of topics) merged.add(t);
+    // Safety net: a change that diffed to no topics still reaches the general subscribers.
+    if (merged.size === 0) notifyTopics("all");
+    else notifyTopics(merged);
   };
   const set = (next: LiveState, batched = false) => {
     if (
@@ -230,15 +375,23 @@ export function createStreamsStore(
       next.consults === state.consults
     )
       return;
+    const topics = diffLiveTopics(state, next);
     state = next;
     if (batched && batchFrames()) {
+      if (pending === null) pending = new Set();
+      for (const t of topics) pending.add(t);
       frame ??= requestAnimationFrame(() => {
         frame = null;
-        notify();
+        const waiting = pending;
+        const all = pendingAll;
+        pending = null;
+        pendingAll = false;
+        if (all || waiting === null || waiting.size === 0) notifyTopics("all");
+        else notifyTopics(waiting);
       });
       return;
     }
-    flush();
+    flush(topics);
   };
   return {
     get: () => state,
@@ -397,8 +550,8 @@ export function createStreamsStore(
     /** The server's active runs, asked about runs gone quiet (`recheckRuns`). */
     recheck: (runIds: readonly string[], active: readonly ActiveRun[] | undefined) =>
       set({ ...state, streams: recheckRuns(state.streams, runIds, active, now()) }),
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
+    subscribe: (listener: () => void, topics?: LiveTopic[]) => {
+      listeners.set(listener, topics && topics.length > 0 ? new Set(topics) : null);
       return () => {
         listeners.delete(listener);
       };
@@ -1002,14 +1155,23 @@ function shallowEqual(a: unknown, b: unknown): boolean {
  * Subscribes to a slice of the live store; re-renders only when that slice
  * changes (`isEqual`), so a streaming delta re-renders the streaming row, not
  * the whole timeline.
+ *
+ * `topics` names what the selector depends on (see `liveTopics`): only those wake the check. Without topics the
+ * subscription is general and fires on every change, exactly as before — the fallback for anything not yet mapped.
  */
-export function useLive<T>(select: (state: LiveState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
+export function useLive<T>(
+  select: (state: LiveState) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+  topics?: LiveTopic[],
+): T {
   // Outside the org shell (a lone component in a test, the gallery): a quiet, empty store.
   const store = useContext(RealtimeContext)?.streams ?? quietStore();
   const selectRef = useRef(select);
   selectRef.current = select;
   const [value, setValue] = useState(() => select(store.get()));
   const valueRef = useRef(value);
+  // A new array each render would resubscribe: subscribe by its joined key.
+  const topicKey = topics?.join("\0");
   // biome-ignore lint/correctness/useExhaustiveDependencies: the selector and isEqual are read through refs
   useEffect(() => {
     const check = () => {
@@ -1020,8 +1182,11 @@ export function useLive<T>(select: (state: LiveState) => T, isEqual: (a: T, b: T
       }
     };
     check();
-    return store.subscribe(check);
-  }, [store]);
+    return store.subscribe(
+      check,
+      topicKey === undefined ? undefined : topicKey.length === 0 ? [] : topicKey.split("\0"),
+    );
+  }, [store, topicKey]);
   // The selector may read the component's own state (which runs a channel shows): a render checks again.
   // A selector that builds a new list or object each call (`runsInChannel`) would set it on every render
   // and never stop: one with the same items counts as unchanged here.
@@ -1035,8 +1200,12 @@ export function useLive<T>(select: (state: LiveState) => T, isEqual: (a: T, b: T
   return value;
 }
 
-export function useStreams<T>(select: (state: StreamsState) => T, isEqual?: (a: T, b: T) => boolean): T {
-  return useLive((s) => select(s.streams), isEqual);
+export function useStreams<T>(
+  select: (state: StreamsState) => T,
+  isEqual?: (a: T, b: T) => boolean,
+  topics?: LiveTopic[],
+): T {
+  return useLive((s) => select(s.streams), isEqual, topics);
 }
 
 export function useLiveStore() {

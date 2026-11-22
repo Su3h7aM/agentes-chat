@@ -83,7 +83,7 @@ import { useNamesComputers } from "@/components/WorkspaceComputer";
 import { useDirectory } from "@/hooks/useDirectory";
 import { inlineWords } from "@/lib/markdown";
 import { useToast } from "@/lib/toast";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import {
   CommandApprovalSelect,
   ExecutorMark,
@@ -166,8 +166,10 @@ export function MissionPlanCard({ plan: meta }: { plan: MissionPlanMeta }) {
   const names = useNamesComputers(org.id);
   const offline = Boolean(m?.machine && !m.machine.online);
   // The main session is still drafting the plan (its run is live in the mission's thread).
-  const drafting = useStreams((st) =>
-    Object.values(st.runs).some((r) => r.agentId === m?.agentId && r.threadId === m?.threadId),
+  const drafting = useStreams(
+    (st) => Object.values(st.runs).some((r) => r.agentId === m?.agentId && r.threadId === m?.threadId),
+    undefined,
+    m?.agentId ? [liveTopics.agentRuns(m.agentId)] : [liveTopics.runs],
   );
   const waitPlan = drafting && items.length === 0;
   const seePlan = () => panel?.openFiles(meta.missionId, "mission.md");

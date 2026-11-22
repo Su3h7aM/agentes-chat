@@ -92,7 +92,7 @@ import { useTextLimit } from "@/hooks/useTextLimit";
 import { usePageVisible } from "@/hooks/useWindowActive";
 import { pastes } from "@/lib/keys";
 import { useToast } from "@/lib/toast";
-import { useBrowserLive, useConnectionStatus, useStreams } from "@/realtime/context";
+import { liveTopics, useBrowserLive, useConnectionStatus, useStreams } from "@/realtime/context";
 import { AgentWho } from "../AgentAvatar";
 import { AskActions, HandBackFoot, useAskControl } from "../computer/control";
 import { DialogHead, FullButton, FullScreenButton, useDialogHead, useSayFailed } from "../computer/head";
@@ -294,7 +294,7 @@ export function HeldBrowserCard({
 export function useHeldTakeover(agentId: string, runId: string, enabled = true): BrowserHandoff | null {
   const { org } = useOrg();
   const open = useAgentBrowserHandoff(org.id, agentId, enabled, HELD_STALE_MS);
-  const liveHere = useStreams((s) => Boolean(s.runs[runId]));
+  const liveHere = useStreams((s) => Boolean(s.runs[runId]), undefined, [liveTopics.run(runId)]);
   return !liveHere && open.data && isHeldTakeover(open.data, runId) ? open.data : null;
 }
 

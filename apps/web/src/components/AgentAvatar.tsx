@@ -18,7 +18,7 @@ import { useDirectory } from "@/hooks/useDirectory";
 import { useAgentPresence, usePersonPresence } from "@/hooks/usePresence";
 import { opensItsBlock } from "@/lib/inline";
 import { lookOf } from "@/lib/look";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 
 type AgentAvatarProps = Omit<AvatarProps, "kind" | "running" | "state" | "appearance" | "presence"> & {
   /** A real agent: its look from the directory, its live state from the run store. */
@@ -171,7 +171,7 @@ function LiveAgentAvatar({
   asleep,
   ...rest
 }: Omit<AgentAvatarProps, "presence"> & { agentId: string; presence: AgentFace | null }) {
-  const live = useStreams((s) => agentStateIn(s, agentId, channelId));
+  const live = useStreams((s) => agentStateIn(s, agentId, channelId), undefined, [liveTopics.agentRuns(agentId)]);
   const { org } = useOrg();
   const dir = useDirectory(org.id);
   const known = dir.anyAgent(agentId);

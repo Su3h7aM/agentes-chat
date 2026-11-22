@@ -39,7 +39,7 @@ import { useTextLimit } from "@/hooks/useTextLimit";
 import { TYPED_VALUES } from "@/i18n";
 import { inPlaceClick } from "@/lib/navigate";
 import { useToast } from "@/lib/toast";
-import { useLive, useLiveStore } from "@/realtime/context";
+import { liveTopics, useLive, useLiveStore } from "@/realtime/context";
 import { AgentAvatar } from "./AgentAvatar";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { SiteIcon } from "./browser/SiteIcon";
@@ -453,7 +453,7 @@ export function QuestionCard({ question, asker }: { question: AgentQuestion; ask
   const api = useApi();
   const dir = useDirectory(org.id);
   const live = useLiveStore();
-  const fresh = useLive((s) => s.questions[question.id]);
+  const fresh = useLive((s) => s.questions[question.id], undefined, [liveTopics.question(question.id)]);
   const current = fresh?.status === "open" && question.status !== "open" ? question : (fresh ?? question);
   const [error, setError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -690,7 +690,7 @@ export function SecretCard({
   const dir = useDirectory(org.id);
   const live = useLiveStore();
   const current = latestSecret(
-    useLive((s) => s.secrets[request.id]),
+    useLive((s) => s.secrets[request.id], undefined, [liveTopics.secret(request.id)]),
     request,
   );
   const navigate = useNavigate();

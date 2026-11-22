@@ -40,7 +40,7 @@ import {
   usePresencesLoaded,
 } from "@/hooks/usePresence";
 import { lookOf } from "@/lib/look";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import "./members.css";
 
 /** Offline rows drawn before "Mostrar mais". */
@@ -179,11 +179,14 @@ function MembersList({ channelId, people, agents, onAdd, pending }: Lists) {
   // Who is online and the hoisted roles group the rows: until both are in, the column waits unseen.
   const presencesLoaded = usePresencesLoaded();
   const waiting = pending || !presencesLoaded || rolesRead.isPending;
-  const busyKey = useStreams((s) =>
-    agents
-      .filter((a) => agentStateIn(s, a.id) !== "idle")
-      .map((a) => a.id)
-      .join(" "),
+  const busyKey = useStreams(
+    (s) =>
+      agents
+        .filter((a) => agentStateIn(s, a.id) !== "idle")
+        .map((a) => a.id)
+        .join(" "),
+    undefined,
+    agents.map((a) => liveTopics.agentRuns(a.id)),
   );
   const [allOffline, setAllOffline] = useState(false);
   // At work: a run this tab hears here, or its work anywhere (work handed off in two agents' DM too).
@@ -362,7 +365,7 @@ function AgentRow({
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
   const dir = useDirectory(org.id);
-  const state = useStreams((s) => agentStateIn(s, agent.id, channelId));
+  const state = useStreams((s) => agentStateIn(s, agent.id, channelId), undefined, [liveTopics.agentRuns(agent.id)]);
   const shown = useAgentPresence(agent.id);
   const work = shown?.work ?? null;
   // The name of where it works alone: the whole list moves with every message's unread count.

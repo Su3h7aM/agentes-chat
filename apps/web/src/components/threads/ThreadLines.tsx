@@ -23,7 +23,7 @@ import { useOrg } from "@/components/org-context";
 import { WaitMark } from "@/components/RequestCard";
 import { useDirectory } from "@/hooks/useDirectory";
 import { useStorePart, type ValueStore } from "@/lib/value-store";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { ThreadStatusChip } from "./ThreadBits";
 import "./threads.css";
 
@@ -119,6 +119,8 @@ export function ThreadReplyLine({ thread, count }: { thread: ThreadInfo; count: 
   // A run in the thread right now (the list's `working` lags until it refetches): its agent's orbit.
   const liveAgent = useStreams(
     (s) => runsInChannel(s, thread.channelId).find((r) => r.threadId === thread.id && r.status !== "failed")?.agentId,
+    undefined,
+    [liveTopics.channelRuns(thread.channelId)],
   );
   const state = thread.state === "open" ? threadWorkState(thread, Boolean(liveAgent)) : null;
   const people = thread.participants.flatMap((p) => (p.id && p.type !== "app" ? [{ type: p.type, id: p.id }] : []));
@@ -158,14 +160,17 @@ export function ThreadReplyingLine({ messageId, channelId }: { messageId: string
   const { t } = useTranslation();
   const actors = useActors();
   const openId = useContext(OpenThreadContext);
-  const agentIds = useStreams((s) =>
-    [
-      ...new Set(
-        runsInChannel(s, channelId)
-          .filter((r) => repliesUnder(r, messageId))
-          .map((r) => r.agentId),
-      ),
-    ].join(","),
+  const agentIds = useStreams(
+    (s) =>
+      [
+        ...new Set(
+          runsInChannel(s, channelId)
+            .filter((r) => repliesUnder(r, messageId))
+            .map((r) => r.agentId),
+        ),
+      ].join(","),
+    undefined,
+    [liveTopics.channelRuns(channelId)],
   );
   if (!agentIds) return null;
   const people = agentIds.split(",").map((id) => ({ type: "agent" as const, id }));

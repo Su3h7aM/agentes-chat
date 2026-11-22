@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import { AgentAvatar, AgentSpinner } from "@/components/AgentAvatar";
 import { useOrg } from "@/components/org-context";
 import { useDirectory } from "@/hooks/useDirectory";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { useCodeKey, withKey } from "./shortcuts";
 
 /** The quiet mark of a session that waits on me (the requests' own mark). */
@@ -25,14 +25,18 @@ export const WaitMark = () => (
  */
 function useSubagentsLine(channelId: string): string | null {
   const { t } = useTranslation();
-  return useStreams((s) => {
-    for (const run of Object.values(s.runs)) {
-      if (run.channelId !== channelId) continue;
-      const busy = subagentsNow(run.work);
-      if (busy) return subagentsTail(t, busy);
-    }
-    return null;
-  });
+  return useStreams(
+    (s) => {
+      for (const run of Object.values(s.runs)) {
+        if (run.channelId !== channelId) continue;
+        const busy = subagentsNow(run.work);
+        if (busy) return subagentsTail(t, busy);
+      }
+      return null;
+    },
+    undefined,
+    [liveTopics.channelRuns(channelId)],
+  );
 }
 
 export function SessionState({ session }: { session: CodeSession }) {

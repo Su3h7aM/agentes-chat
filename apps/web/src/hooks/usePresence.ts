@@ -15,7 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useCallback, useMemo } from "react";
 import { useOrg } from "@/components/org-context";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 
 /*
  * Presence and written status (ADR 0084) for one person or one agent, read from the lists every screen shares
@@ -121,8 +121,10 @@ export function useAgentPresence(agentId: string | null | undefined): AgentShown
     select: pickAi,
   }).data;
   // A run of its this tab hears: at work before the list's next read says so.
-  const workingIn = useStreams((s) =>
-    agentId && agentStateIn(s, agentId) !== "idle" ? agentWorkingIn(s, agentId) : null,
+  const workingIn = useStreams(
+    (s) => (agentId && agentStateIn(s, agentId) !== "idle" ? agentWorkingIn(s, agentId) : null),
+    undefined,
+    agentId ? [liveTopics.agentRuns(agentId)] : undefined,
   );
   if (!on || status === undefined) return null;
   const { presence, noAi } = agentFaceOf(status ?? undefined, ai, workingIn !== null);

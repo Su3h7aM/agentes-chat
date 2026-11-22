@@ -13,7 +13,7 @@ import { useApi } from "@/api/context";
 import { useOrg } from "@/components/org-context";
 import { useDirectory } from "@/hooks/useDirectory";
 import { useToast } from "@/lib/toast";
-import { useLive, useLiveStore } from "@/realtime/context";
+import { liveTopics, useLive, useLiveStore } from "@/realtime/context";
 
 /** Still working (thinking, writing or running a tool), not stopped yet. */
 export const isStoppable = (r: LiveRun) =>
@@ -92,7 +92,11 @@ export function useContinueRun() {
 
 /** This stopped run was already continued (here, by someone else, or before a reload). */
 export function useWasContinued(runId: string | null | undefined, message?: Pick<Message, "id" | "meta">) {
-  const here = useLive((s) => (runId ? s.continued[runId] : undefined));
+  const here = useLive(
+    (s) => (runId ? s.continued[runId] : undefined),
+    undefined,
+    runId ? [liveTopics.continuedRun(runId)] : [liveTopics.continued],
+  );
   const heard = useContinuedRun(message?.id ?? "");
   return here !== undefined || Boolean(heard) || Boolean(message && continuedRunIdOf(message));
 }

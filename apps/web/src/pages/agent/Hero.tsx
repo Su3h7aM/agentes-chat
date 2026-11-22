@@ -12,7 +12,7 @@ import { AgentCover } from "@/components/Sky";
 import { UsageQueueChip } from "@/components/UsageQueue";
 import { ownsOrManages } from "@/lib/agent-edit";
 import { useToast } from "@/lib/toast";
-import { useStreams } from "@/realtime/context";
+import { liveTopics, useStreams } from "@/realtime/context";
 import { useAgentEdit } from "./context";
 
 const LIVE = new Set(["running", "queued", "thinking", "waiting_approval"]);
@@ -32,16 +32,20 @@ function editNameSoon(tries = 5) {
 
 /** The agent's live run, if any: "status|channelId|connector" (a string, so the selector is stable). */
 function useLiveRun(agentId: string) {
-  const key = useStreams((s) => {
-    let found: { status: string; channelId: string; connector: string } | null = null;
-    for (const r of Object.values(s.runs)) {
-      if (r.agentId !== agentId || !LIVE.has(r.status)) continue;
-      // Working beats waiting.
-      if (!found || found.status === "waiting_approval")
-        found = { status: r.status, channelId: r.channelId, connector: r.connector ?? "" };
-    }
-    return found ? `${found.status}|${found.channelId}|${found.connector}` : "";
-  });
+  const key = useStreams(
+    (s) => {
+      let found: { status: string; channelId: string; connector: string } | null = null;
+      for (const r of Object.values(s.runs)) {
+        if (r.agentId !== agentId || !LIVE.has(r.status)) continue;
+        // Working beats waiting.
+        if (!found || found.status === "waiting_approval")
+          found = { status: r.status, channelId: r.channelId, connector: r.connector ?? "" };
+      }
+      return found ? `${found.status}|${found.channelId}|${found.connector}` : "";
+    },
+    undefined,
+    [liveTopics.agentRuns(agentId)],
+  );
   if (!key) return null;
   const [status = "", channelId = "", connector = ""] = key.split("|");
   return { status, channelId, connector };

@@ -48,7 +48,7 @@ import { OpensAgent } from "@/components/OpensAgent";
 import { useOrg } from "@/components/org-context";
 import { StopTaskButton, useTaskStop } from "@/components/tasks/TaskBits";
 import { useDirectory } from "@/hooks/useDirectory";
-import { useLive } from "@/realtime/context";
+import { liveTopics, useLive } from "@/realtime/context";
 import "./computer-queue.css";
 
 /**
@@ -358,7 +358,10 @@ const sameWaits = (a: ConversationWait[], b: ConversationWait[]) =>
  * waits, and its computer's line only adds to it.
  */
 export function QueueWaitTurns({ channelId, messages }: { channelId: string; messages: readonly Message[] }) {
-  const waits = useLive((s) => conversationWaits(messages, s.receipts, (id) => id in s.streams.runs), sameWaits);
+  const waits = useLive((s) => conversationWaits(messages, s.receipts, (id) => id in s.streams.runs), sameWaits, [
+    liveTopics.receipts,
+    liveTopics.runs,
+  ]);
   return (
     <>
       {waits.map((w) => (
@@ -410,7 +413,7 @@ export function FanOutStrip({ message, otherwise = null }: { message: Message; o
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
   const dir = useDirectory(org.id);
-  const receipt = useLive((s) => s.receipts[message.id]);
+  const receipt = useLive((s) => s.receipts[message.id], undefined, [liveTopics.receipt(message.id)]);
   const plain = fanOutOf(receipt);
   const open = plain?.agents.filter((a) => a.state === "working" || a.state === "inLine") ?? [];
   const machineId = useAgentMachineId(open[0]?.agentId);
