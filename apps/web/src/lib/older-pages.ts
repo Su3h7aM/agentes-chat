@@ -10,52 +10,24 @@ export function retainedOlderTail<T>(messages: readonly T[], max = RETAINED_OLDE
   return messages.length <= max ? null : messages.slice(messages.length - max);
 }
 
-/** A fetched older page waits for this long without the person moving the list. */
-export const OLDER_ADMISSION_QUIET_MS = 120;
-/** The page commits once this many consecutive frames hold the same position. */
-export const OLDER_ADMISSION_STABLE_FRAMES = 2;
-/** Scroll positions must hold within this much on two consecutive frames. */
-export const OLDER_ADMISSION_MAX_DRIFT = 0.5;
-/** Continuous motion still gets the page in after this long. */
-export const OLDER_ADMISSION_FORCE_MS = 1500;
-
-export interface OlderAdmission {
-  /** When the fetched page first waited to be shown. */
-  startedAt: number;
-  /** The last user motion on the list. */
-  quietAt: number;
-  lastTop: number | null;
-  stableFrames: number;
-}
-
-/** Starts waiting for a quiet list and two stable scroll positions. */
-export function beginOlderAdmission(now: number, top: number): OlderAdmission {
-  return { startedAt: now, quietAt: now, lastTop: top, stableFrames: 0 };
-}
-
-/** A wheel, touch, key or scrollbar motion: admission starts its quiet period again. */
-export function noteOlderMotion(admission: OlderAdmission, now: number): void {
-  admission.quietAt = now;
-  admission.lastTop = null;
-  admission.stableFrames = 0;
-}
+/**
+ * Maximum older rows joined in one commit where manual anchoring draws them at real height.
+ * Keeping each commit to ~13 rows (~1,500px, >2 screens above the reader) breaks a 50-row
+ * mount/layout/paint/release spike into short slices with painted wheel frames in between,
+ * while keeping the rendered timeline contiguous on every frame.
+ */
+export const OLDER_JOIN_CHUNK = 13;
 
 /**
- * Records one rendered frame. The page may be committed after the quiet period and two consecutive frames whose
- * scrollTop drifts by at most half a pixel. A bounded wait keeps a continuous gesture from holding it forever.
+ * Splits a chronological older page (`oldest..newest`) into contiguous join slices ordered
+ * newest-slice-first so each slice prepends directly above the rows already in the list.
  */
-export function advanceOlderAdmission(admission: OlderAdmission, now: number, top: number): "waiting" | "admit" {
-  if (now - admission.startedAt >= OLDER_ADMISSION_FORCE_MS) return "admit";
-  if (now - admission.quietAt < OLDER_ADMISSION_QUIET_MS) {
-    admission.lastTop = top;
-    admission.stableFrames = 0;
-    return "waiting";
+export function olderJoinChunks<T>(page: readonly T[], size = OLDER_JOIN_CHUNK): T[][] {
+  if (page.length === 0) return [];
+  if (size <= 0 || page.length <= size) return [[...page]];
+  const chunks: T[][] = [];
+  for (let end = page.length; end > 0; end -= size) {
+    chunks.push(page.slice(Math.max(0, end - size), end));
   }
-  if (admission.lastTop !== null && Math.abs(top - admission.lastTop) <= OLDER_ADMISSION_MAX_DRIFT) {
-    admission.stableFrames += 1;
-  } else {
-    admission.stableFrames = 0;
-  }
-  admission.lastTop = top;
-  return admission.stableFrames >= OLDER_ADMISSION_STABLE_FRAMES ? "admit" : "waiting";
+  return chunks;
 }

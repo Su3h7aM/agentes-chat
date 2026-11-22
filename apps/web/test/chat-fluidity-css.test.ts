@@ -78,3 +78,10 @@ test("the newest rows are never skipped: a message I send is its own height when
   expect(last(topLevel(css), newest, "content-visibility")).toBe("visible");
   expect(last(topLevel(css), ".channel__messages .ac-msg", "content-visibility")).toBe("auto");
 });
+
+test("rows marked data-drawn render at their real height on every browser, not only with manual anchoring", () => {
+  expect(last(topLevel(css), ".channel__messages > .ac-msg[data-drawn]", "content-visibility")).toBe("visible");
+  expect(
+    last(topLevel(css), ".channel__messages[data-manual-anchor] > .ac-msg[data-drawn]", "content-visibility"),
+  ).toBeUndefined();
+});

@@ -264,6 +264,7 @@ import {
   type RowResize,
   restoreAnchorPosition,
   settleAnchor,
+  shiftScrollTop,
   type VisibleAnchor,
   visibleAnchor,
 } from "@/chat/anchor";
@@ -271,7 +272,14 @@ import { tokenizeBody } from "@/chat/body";
 import { ChatMedia } from "@/chat/ChatMedia";
 import { ChatVoice } from "@/chat/ChatVoice";
 import { ClippedBody } from "@/chat/ClippedBody";
-import { DRAWN, drawAhead } from "@/chat/draw-ahead";
+import {
+  clearLockedRowHeights,
+  DRAWN,
+  drawAhead,
+  hasDrawnRunwayAbove,
+  isRowHeightLocked,
+  lockRowHeights,
+} from "@/chat/draw-ahead";
 import { LongDraftNotice } from "@/chat/LongDraftNotice";
 import { useConversationLook, useConversationWallpaper } from "@/chat/look";
 import { MessageBody } from "@/chat/MessageBody";
@@ -460,7 +468,7 @@ import { desktopPlatform, thisMac, useDocumentTitle } from "@/lib/desktop";
 import { holdOnScreen } from "@/lib/island";
 import { composes, typingInField } from "@/lib/keys";
 import { lookOf } from "@/lib/look";
-import { advanceOlderAdmission, beginOlderAdmission, noteOlderMotion, retainedOlderTail } from "@/lib/older-pages";
+import { OLDER_JOIN_CHUNK, olderJoinChunks, retainedOlderTail } from "@/lib/older-pages";
 import { type AgentPanelPlace, agentPanelSearch, threadSearch, useAgentPanel, useThreadPanel } from "@/lib/open-param";
 import { reportPainted } from "@/lib/perf";
 import { useToast } from "@/lib/toast";
@@ -587,27 +595,37 @@ const TRIM_SLACK = 50;
 /** Pinned this long, it lets go of what is far above (shorter in tests). */
 export const trimming = { afterMs: 10_000 };
 /** The rows drawn ahead of what is on screen where the browser's anchoring is not used (`drawAhead`), at least. */
-const DRAW_AHEAD = 800;
+const DRAW_AHEAD = 1200;
+/** Fallback idle timeout after the last wheel/scroll event when the engine does not emit `scrollend` (e.g. at bounds). */
+const WHEEL_IDLE_FALLBACK_MS = 140;
+/** Hard cap for deferring an older-page slice commit while waiting for a smooth-wheel glide to finish. */
+const WHEEL_SLICE_CAP_MS = 450;
 /** Older pages a channel already loaded, and whether there are no more. */
 type OlderPages = { pages: MessageType[]; done: boolean };
-type OlderStatus = "idle" | "loading" | "staged" | "done";
+type OlderStatus = "idle" | "loading" | "done";
 type OlderWindow = {
   /** The channel whose cache these pages belong to. */
   scope: string;
   pages: MessageType[];
-  /** A page arrived and the prepend restore has not been claimed yet. */
-  prepended: boolean;
-  /** The admission gate owns this prepend's scroll correction. */
-  gated: boolean;
+  /** The page that just joined the top of `pages`: `ProgressiveAnchor` draws it and holds the reader's row. */
+  joined: readonly MessageType[] | null;
   status: OlderStatus;
 };
-type OlderWindowFields = Pick<OlderWindow, "pages" | "prepended" | "gated">;
-/** A fetched older page waiting for the list to be quiet before it joins the conversation. */
-type StagedOlderPage = {
-  page: MessageType[];
-  limit: number;
-  request: number;
-  scope: string;
+/** Rows kept drawn ahead by `drawNear`, paired with the scroll position they were drawn for. */
+type DrawnPool = { rows: Set<Element>; top: number };
+/**
+ * Tracks whether a WebKitGTK smooth-wheel animation may currently be gliding on the scroller.
+ * Writing `el.scrollTop` during `ScrollAnimationSmooth` aborts the remaining wheel delta, so
+ * non-urgent layout work above the viewport waits for `scrollend` or two quiet animation frames.
+ */
+type WheelGlide = {
+  active: boolean;
+  /** True only during the JS task that dispatched `wheel`; a synchronous `scroll` in that same task is not a glide. */
+  sameTask: boolean;
+  /** Timestamp of the last programmatic `scrollTop` write; ignores a stale `scrollend` queued by that write. */
+  lastProgrammaticAt: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  waiters: Set<() => void>;
 };
 /** Same limit as the server (`MAX_MESSAGE_ATTACHMENTS`). */
 const MAX_ATTACHMENTS = 10;
@@ -1416,33 +1434,34 @@ function ChannelView({
   const cachedOlder: OlderWindow = {
     scope: olderScope,
     pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [],
-    prepended: false,
-    gated: false,
+    joined: null,
     status: qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle",
   };
   const [olderWindow, setOlderWindowState] = useState<OlderWindow>(() => cachedOlder);
-  const windowForChannel = olderWindow.scope === olderScope ? olderWindow : cachedOlder;
-  const { pages, prepended, gated, status: olderState } = windowForChannel;
-  const older = pages;
-  const currentOlder = (window: OlderWindow) => (window.scope === olderScope ? window : cachedOlder);
+  const { pages: older, joined, status: olderState } = olderWindow.scope === olderScope ? olderWindow : cachedOlder;
   const setOlderWindow = (
-    next: Partial<OlderWindowFields> | ((previous: OlderWindowFields) => Partial<OlderWindowFields>),
+    next: Partial<Omit<OlderWindow, "scope">> | ((previous: OlderWindow) => Partial<Omit<OlderWindow, "scope">>),
   ) => {
     setOlderWindowState((current) => {
-      const base = currentOlder(current);
+      const base = current.scope === olderScope ? current : cachedOlder;
       const patch = typeof next === "function" ? next(base) : next;
-      return { ...base, ...patch, ...(patch.prepended === false ? { gated: false } : {}), scope: olderScope };
+      return { ...base, ...patch, scope: olderScope };
     });
   };
-  const setOlderState = (next: OlderStatus | ((status: OlderStatus) => OlderStatus)) => {
-    setOlderWindowState((current) => {
-      const base = currentOlder(current);
-      return { ...base, status: typeof next === "function" ? next(base.status) : next, scope: olderScope };
-    });
-  };
-  const [stagedOlder, setStagedOlder] = useState<StagedOlderPage | null>(null);
   const olderBusy = useRef(false);
   const olderRequest = useRef(0);
+  const olderChunksCancel = useRef<(() => void) | null>(null);
+  const cancelOlderChunks = () => {
+    olderChunksCancel.current?.();
+    olderChunksCancel.current = null;
+  };
+  useEffect(
+    () => () => {
+      olderChunksCancel.current?.();
+      olderChunksCancel.current = null;
+    },
+    [],
+  );
   const newerRequest = useRef(0);
   // Going to a message far back shows the page around it on its own (`older`), apart from the latest page: newer
   // pages come as the person scrolls down, until they reach it.
@@ -1452,19 +1471,18 @@ function ChannelView({
   const [newerLoading, setNewerLoading] = useState(false);
   const manualAnchor = desktopPlatform() === "linux" || !anchorsScroll();
   const restoredAnchor = useRef<RestoredAnchor | null>(null);
-  const admissionAnchor = useRef<VisibleAnchor | null>(null);
   const loadOlder = (limit = OLDER_PAGE) => {
     // A thread view loads its whole conversation at once.
     if (thread || olderBusy.current || olderState !== "idle" || !messages.data) return;
     const oldest = older[0] ?? messages.data[0];
     if (!oldest || messages.data.length < MESSAGES_PAGE) {
-      setOlderState("done");
+      setOlderWindow({ status: "done" });
       return;
     }
     const request = ++olderRequest.current;
     const scope = olderScopeRef.current;
     olderBusy.current = true;
-    setOlderState("loading");
+    setOlderWindow({ status: "loading" });
     api.chat
       .messages(org.id, channel.id, { before: oldest.createdAt, limit, onCards: cardsInto(qc, org.id) })
       .then((page) => {
@@ -1474,31 +1492,119 @@ function ChannelView({
         // Nothing older, or the same page again: there is no next page to wait for.
         if (added.length === 0) {
           olderBusy.current = false;
-          setOlderState("done");
+          setOlderWindow({ status: "done" });
           const current = qc.getQueryData<OlderPages>(olderKey)?.pages ?? older;
           if (!gapRef.current) qc.setQueryData<OlderPages>(olderKey, { pages: current, done: true });
           return;
         }
-        setOlderState("staged");
-        setStagedOlder({ page: added, limit, request, scope });
+        // The page joins now. On manual anchoring (Linux / WebKitGTK), joining 50 rich rows in one commit stalls
+        // CPU-rendered machines for ~350-450ms; splitting into contiguous newest-first slices (~13 rows, >2 screens
+        // above the reader each) keeps every commit short while drawing each slice at its real height with its own
+        // pre-mutation anchor. When pinned to the end no off-screen rows are drawn, so the whole page joins at once.
+        const done = added.length < limit;
+        const chunks = manualAnchor && !stick.current ? olderJoinChunks(added) : [added];
+        const commitSlice = (slice: MessageType[], isLast: boolean) => {
+          const status: OlderStatus = isLast && done ? "done" : "idle";
+          if (isLast) olderBusy.current = false;
+          setOlderWindow((prev) => {
+            const seen = new Set(prev.pages.map((m) => m.id));
+            const fresh = slice.filter((m) => !seen.has(m.id));
+            if (fresh.length === 0) return { status };
+            const pages = [...fresh, ...prev.pages];
+            if (!gapRef.current) qc.setQueryData<OlderPages>(olderKey, { pages, done: isLast && done });
+            return { pages, joined: fresh, status };
+          });
+        };
+        cancelOlderChunks();
+        const [first, ...rest] = chunks;
+        if (!first) {
+          olderBusy.current = false;
+          setOlderWindow({ status: done ? "done" : "idle" });
+          return;
+        }
+        // On manual anchoring (WebKitGTK), writing `scrollTop` mid-smooth-wheel animation aborts the glide.
+        // When comfortably below the top (>1 viewport of runway), wait for the current wheel glide to end
+        // (capped at `WHEEL_SLICE_CAP_MS` so continuous flings never starve page loading).
+        const deferForWheel = () =>
+          manualAnchor &&
+          !stick.current &&
+          wheelGlide.current.active &&
+          (scroller.current?.scrollTop ?? 0) > (scroller.current?.clientHeight ?? 0);
+        let index = 0;
+        let frame1 = 0;
+        let frame2 = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelWheelWait: (() => void) | null = null;
+        let cancelled = false;
+        const stop = () => {
+          cancelled = true;
+          cancelAnimationFrame(frame1);
+          cancelAnimationFrame(frame2);
+          clearTimeout(timer);
+          cancelWheelWait?.();
+          cancelWheelWait = null;
+          if (olderChunksCancel.current === stop) olderChunksCancel.current = null;
+        };
+        const runOrDefer = (work: () => void) => {
+          if (!deferForWheel()) {
+            work();
+            return;
+          }
+          cancelWheelWait?.();
+          cancelWheelWait = whenWheelIdle(() => {
+            cancelWheelWait = null;
+            if (cancelled || request !== olderRequest.current || scope !== olderScopeRef.current) return;
+            work();
+          }, WHEEL_SLICE_CAP_MS);
+        };
+        const scheduleNext = () => {
+          // Two animation frames + macrotask: let the previous slice paint, lock & release `data-drawn`, and give
+          // incoming wheel input one clean frame before mounting the next slice above the viewport.
+          frame1 = requestAnimationFrame(() => {
+            if (cancelled) return;
+            frame2 = requestAnimationFrame(() => {
+              timer = setTimeout(() => {
+                if (cancelled || request !== olderRequest.current || scope !== olderScopeRef.current) return;
+                runOrDefer(() => {
+                  if (stick.current) {
+                    const remaining = rest.slice(index).reverse().flat();
+                    stop();
+                    commitSlice(remaining, true);
+                    return;
+                  }
+                  const next = rest[index++];
+                  const isLast = index >= rest.length;
+                  if (isLast) stop();
+                  if (next) commitSlice(next, isLast);
+                  if (!isLast) scheduleNext();
+                });
+              }, 0);
+            });
+          });
+        };
+        if (rest.length > 0 || deferForWheel()) olderChunksCancel.current = stop;
+        runOrDefer(() => {
+          if (rest.length === 0) stop();
+          commitSlice(first, rest.length === 0);
+          if (rest.length > 0) scheduleNext();
+        });
       })
       .catch(() => {
         if (request !== olderRequest.current || scope !== olderScopeRef.current) return;
         olderBusy.current = false;
-        setOlderState("idle");
+        setOlderWindow({ status: "idle" });
       });
   };
   /** Shows the page around a message: joined to the latest page when they meet, apart (`gap`) when not. */
   const showAround = (page: MessageType[]) => {
+    cancelOlderChunks();
     olderRequest.current += 1;
     olderBusy.current = false;
-    setStagedOlder(null);
     const start = channelMessages.data?.[0]?.createdAt;
     const joins = !start || (page.at(-1)?.createdAt ?? "") >= start;
     const kept = joins && start ? page.filter((m) => m.createdAt < start) : page;
-    setOlderWindow({ pages: kept, prepended: false });
+    setOlderWindow({ pages: kept, joined: null, status: "idle" });
     setGap(!joins);
-    setOlderState("idle");
     qc.setQueryData<OlderPages>(olderKey, { pages: joins ? kept : [], done: false });
   };
   const loadNewer = () => {
@@ -1515,7 +1621,7 @@ function ChannelView({
         const start = channelMessages.data?.[0]?.createdAt;
         const met = page.length < OLDER_PAGE || (start !== undefined && (page.at(-1)?.createdAt ?? "") >= start);
         if (!met) {
-          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], prepended: false });
+          setOlderWindow({ pages: [...older, ...page.filter((m) => !known.has(m.id))], joined: null });
           return;
         }
         showAround([...older, ...page.filter((m) => !known.has(m.id))]);
@@ -1535,8 +1641,9 @@ function ChannelView({
     if (thread) return;
     const tail = retainedOlderTail(older);
     if (!tail) return;
-    setOlderWindow({ pages: tail, prepended: false });
-    setOlderState((s) => (s === "done" ? "idle" : s));
+    cancelOlderChunks();
+    olderBusy.current = false;
+    setOlderWindow((prev) => ({ pages: tail, joined: null, status: prev.status === "done" ? "idle" : prev.status }));
     qc.setQueryData<OlderPages>(olderKey, { pages: tail, done: false });
   };
   // A response belongs to the channel that asked for it. A route that reuses this view must not let the old one land.
@@ -1544,12 +1651,12 @@ function ChannelView({
   useEffect(() => {
     if (olderResetScope.current === olderScope) return;
     olderResetScope.current = olderScope;
+    cancelOlderChunks();
     olderRequest.current += 1;
     newerRequest.current += 1;
     olderBusy.current = false;
-    setStagedOlder(null);
-    setOlderWindow({ pages: qc.getQueryData<OlderPages>(olderKey)?.pages ?? [], prepended: false });
-    setOlderState(qc.getQueryData<OlderPages>(olderKey)?.done ? "done" : "idle");
+    const cached = qc.getQueryData<OlderPages>(olderKey);
+    setOlderWindow({ pages: cached?.pages ?? [], joined: null, status: cached?.done ? "done" : "idle" });
     setGap(false);
     setNewerLoading(false);
   }, [olderKey, olderScope, qc]);
@@ -1686,19 +1793,81 @@ function ChannelView({
   // Newest at the bottom: follow new messages and streaming text while the person is at the
   // bottom; if they scrolled up, the round button at the top right leads back instead of jumping.
   const scroller = useRef<HTMLElement>(null);
-  // Rows drawn ahead, shared by the scroll handler and the admission correction.
-  const drawnRows = useRef(new Set<Element>());
-  // The last position `drawAhead` ran at: its margin already covers the next few frames.
-  const lastDrawnTop = useRef(0);
-  // The row and top the last upward gesture showed, before late layout could move it.
-  const gestureAnchor = useRef<VisibleAnchor | null>(null);
-  const gestureAnchorAt = useRef(0);
+  // Rows drawn ahead and the scroll position they were drawn for, shared by `drawNear` and `ProgressiveAnchor`.
+  const drawnPool = useRef<DrawnPool>({ rows: new Set<Element>(), top: 0 });
+  const wheelGlide = useRef<WheelGlide>({
+    active: false,
+    sameTask: false,
+    lastProgrammaticAt: 0,
+    timer: undefined,
+    waiters: new Set(),
+  });
+  const finishWheelGlide = () => {
+    const g = wheelGlide.current;
+    g.active = false;
+    g.sameTask = false;
+    if (g.timer !== undefined) {
+      clearTimeout(g.timer);
+      g.timer = undefined;
+    }
+    if (g.waiters.size === 0) return;
+    const pending = [...g.waiters];
+    g.waiters.clear();
+    for (const fn of pending) fn();
+  };
+  const armWheelFallback = () => {
+    const g = wheelGlide.current;
+    if (g.timer !== undefined) clearTimeout(g.timer);
+    g.timer = setTimeout(finishWheelGlide, WHEEL_IDLE_FALLBACK_MS);
+  };
+  const markProgrammaticWrite = () => {
+    wheelGlide.current.lastProgrammaticAt = Date.now();
+  };
+  const markWheelGlide = () => {
+    if (!manualAnchor) return;
+    const g = wheelGlide.current;
+    g.active = true;
+    g.sameTask = true;
+    queueMicrotask(() => {
+      g.sameTask = false;
+    });
+    armWheelFallback();
+  };
+  const whenWheelIdle = (fn: () => void, maxWaitMs?: number): (() => void) => {
+    const g = wheelGlide.current;
+    if (!g.active) {
+      fn();
+      return () => {};
+    }
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const run = () => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      g.waiters.delete(run);
+      fn();
+    };
+    g.waiters.add(run);
+    if (maxWaitMs !== undefined) timer = setTimeout(run, maxWaitMs);
+    return () => {
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      g.waiters.delete(run);
+    };
+  };
   // The scroll position this code wrote: its scroll event is our adjustment, not the person's.
   const programmaticScroll = useRef<number | null>(null);
   const settleScroll = useRef<(() => void) | null>(null);
   const scrollNow = (el: HTMLElement, top: number) => {
     el.scrollTop = top;
     programmaticScroll.current = el.scrollTop;
+    markProgrammaticWrite();
+  };
+  const scrollShift = (el: HTMLElement, delta: number) => {
+    shiftScrollTop(el, delta);
+    programmaticScroll.current = el.scrollTop;
+    markProgrammaticWrite();
   };
   const scrollByOurselves = (el: HTMLElement) => {
     const written = programmaticScroll.current;
@@ -1749,25 +1918,24 @@ function ChannelView({
   const glideEnd = useRef(0);
   // The last wheel/touch/key/pointer on the list: scroll events without one are layout, not the person.
   const lastGesture = useRef(0);
-  // A scroll the person caused without a wheel/touch/key event: a scrollbar drag, or the native scroll.
-  const olderMotionAt = useRef(0);
+  // The last gesture that can move the list down (wheel down, a down key, a finger, the scrollbar): re-pinning
+  // to the bottom requires one of these, so an upward wheel near the bottom can never falsely re-pin.
+  const lastDownGesture = useRef(0);
   const markGesture = () => {
     lastGesture.current = Date.now();
+    lastDownGesture.current = lastGesture.current;
     programmaticScroll.current = null;
-    gestureAnchor.current = null;
-    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // The last gesture that can move the list up (wheel up, an up key, a finger, the scrollbar). Only a scroll up
   // right after one of these lets go of the bottom: content at the end shrinking clamps scrollTop lower too, and
   // right after a wheel down or a click on a row (a tools block folding) that read as "the person scrolled up".
   const lastUpGesture = useRef(0);
-  const markUpGesture = () => {
+  const markUpGesture = (canAlsoGoDown = false) => {
     lastGesture.current = Date.now();
     lastUpGesture.current = lastGesture.current;
+    if (canAlsoGoDown) lastDownGesture.current = lastGesture.current;
     programmaticScroll.current = null;
-    gestureAnchor.current = null;
-    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // The last wheel or finger: a window without focus is still being read while these come (a click doesn't count).
@@ -1775,8 +1943,6 @@ function ChannelView({
   const markScrollGesture = () => {
     lastScrollGesture.current = Date.now();
     programmaticScroll.current = null;
-    gestureAnchor.current = null;
-    gestureAnchorAt.current = 0;
     stopSettle();
   };
   // Pinned to the end a while, the conversation keeps only its newest messages: the pages loaded above leave and the
@@ -1787,8 +1953,8 @@ function ChannelView({
   trimNow.current = () => {
     if (thread || gap || olderState === "loading" || !stick.current) return;
     if (older.length > 0) {
-      setOlderWindow({ pages: [], prepended: false });
-      setOlderState("idle");
+      cancelOlderChunks();
+      setOlderWindow({ pages: [], joined: null, status: "idle" });
       qc.removeQueries({ queryKey: olderKey, exact: true });
     }
     qc.setQueryData<MessageType[]>(keys.messages(org.id, channel.id), (list) =>
@@ -1814,91 +1980,6 @@ function ChannelView({
   useEffect(() => {
     if (holdsMore && stick.current) trimSoon();
   }, [holdsMore, older.length, channelMessages.data]);
-  // A fetched page waits outside the conversation until the list has been quiet for a moment and real frames show
-  // the same position. Then it joins in one update: there is no page under the reader that has to be corrected after.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: staging is the trigger; the writers must not restart the gate
-  useEffect(() => {
-    const staged = stagedOlder;
-    const el = scroller.current;
-    if (!staged || !el) return;
-    if (staged.scope !== olderScopeRef.current || staged.request !== olderRequest.current) {
-      olderBusy.current = false;
-      setStagedOlder(null);
-      setOlderState("idle");
-      return;
-    }
-    const admission = beginOlderAdmission(Date.now(), el.scrollTop);
-    let seenMotion = Math.max(lastGesture.current, olderMotionAt.current);
-    let cancelled = false;
-    let frame = 0;
-    const commit = () => {
-      if (cancelled || staged.request !== olderRequest.current || staged.scope !== olderScopeRef.current) return;
-      olderBusy.current = false;
-      setStagedOlder((current) => (current?.request === staged.request ? null : current));
-      const done = staged.page.length < staged.limit;
-      const shown = gestureAnchor.current;
-      const fromGesture =
-        shown && Date.now() - gestureAnchorAt.current < GESTURE_MS && el.contains(shown.row) ? shown : null;
-      admissionAnchor.current = stick.current ? null : (fromGesture ?? visibleAnchor(el));
-      setOlderWindow((prev) => {
-        const known = new Set(prev.pages.map((m) => m.id));
-        const added = staged.page.filter((m) => !known.has(m.id));
-        if (added.length === 0) return prev;
-        const pages = [...added, ...prev.pages];
-        if (!gapRef.current) qc.setQueryData<OlderPages>(olderKey, { pages, done });
-        return { pages, prepended: true, gated: true };
-      });
-      setOlderState(done ? "done" : "idle");
-      // The page is older than what a person at the end is reading: keep them at the end while it is kept loaded.
-      requestAnimationFrame(() => {
-        const list = scroller.current;
-        if (list && stick.current) {
-          list.scrollTop = list.scrollHeight;
-          programmaticScroll.current = list.scrollTop;
-        }
-      });
-    };
-    const tick = () => {
-      if (cancelled) return;
-      const motionAt = Math.max(lastGesture.current, olderMotionAt.current);
-      if (motionAt !== seenMotion) {
-        seenMotion = motionAt;
-        noteOlderMotion(admission, Date.now());
-      }
-      if (advanceOlderAdmission(admission, Date.now(), el.scrollTop) === "admit") {
-        commit();
-        return;
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(frame);
-    };
-  }, [olderKey, qc, stagedOlder]);
-  // The gate owns the correction for its own prepends. ProgressiveAnchor leaves those alone so only one path writes
-  // scrollTop before the next frame; manual and expanded restores keep their existing behavior.
-  useLayoutEffect(() => {
-    const anchor = admissionAnchor.current;
-    if (!anchor) return;
-    admissionAnchor.current = null;
-    const el = scroller.current;
-    if (!el?.contains(anchor.row)) return;
-    restoredAnchor.current = restoreAnchorPosition(el, anchor);
-    // The page just prepended: position the view first, then draw the rows around it and correct once more.
-    // Their first placeholder-to-real resize is otherwise seen only after a later scroll and moves the reader's row.
-    drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawnRows.current);
-    const drawn = restoreAnchorPosition(el, anchor);
-    if (drawn) restoredAnchor.current = drawn;
-    lastDrawnTop.current = el.scrollTop;
-    programmaticScroll.current = el.scrollTop;
-    settleScroll.current?.();
-    settleScroll.current = settleAnchor(el, anchor, (top) => {
-      el.scrollTop = top;
-      programmaticScroll.current = el.scrollTop;
-    });
-  });
   // Scrolling up always lets go at once: no waiting to leave the "near bottom" band or for a glide to end.
   const letGo = () => {
     stick.current = false;
@@ -2059,10 +2140,22 @@ function ChannelView({
     // Only when the end did move: new rows report their first size during every glide, and a second glide for
     // nothing would hold what grows in its 600ms (the first words of a reply) for one jump at its end.
     let later: ReturnType<typeof setTimeout> | undefined;
+    let wheelPinQueued = false;
     // When the glide this observer started itself ends.
     let ownGlide = 0;
     const pin = (afterGlide = false) => {
       if (!stick.current) return;
+      if (wheelGlide.current.active) {
+        clearTimeout(later);
+        if (!wheelPinQueued) {
+          wheelPinQueued = true;
+          whenWheelIdle(() => {
+            wheelPinQueued = false;
+            if (el.isConnected && stick.current) followRef.current();
+          });
+        }
+        return;
+      }
       const wait = autoScrollUntil.current - Date.now();
       clearTimeout(later);
       if (wait > 0) later = setTimeout(() => pin(true), wait);
@@ -2076,28 +2169,245 @@ function ChannelView({
       } else followRef.current();
     };
     const heights = manualAnchor ? new WeakMap<Element, number>() : null;
+    // Rows whose real laid-out height has been seen (vs still at CSS `content-visibility: auto` placeholder).
+    const measuredRows = new WeakSet<Element>();
+    const seedVisibleMeasured = () => {
+      const box = el.getBoundingClientRect();
+      if (!Number.isFinite(box.height) || box.height <= 0) return;
+      for (const child of el.children) {
+        if (!child.classList.contains("ac-msg")) continue;
+        if (child.hasAttribute(DRAWN) || isRowHeightLocked(child)) {
+          measuredRows.add(child);
+          continue;
+        }
+        const rect = child.getBoundingClientRect();
+        if (rect.bottom > box.top && rect.top < box.bottom) measuredRows.add(child);
+      }
+    };
     // Rows come into view already drawn, so they take their height while out of sight (`drawAhead`).
-    const drawn = drawnRows.current;
-    lastDrawnTop.current = el.scrollTop;
-    const drawNear = () => {
+    const drawn = drawnPool.current;
+    drawn.top = el.scrollTop;
+    // Tracks the highest scrollTop seen before a scroll-up step so ResizeObserver `hold` knows when an
+    // unmeasured placeholder entered the top of the viewport from above it.
+    let anchorEdge = el.scrollTop;
+    let anchorEdgeFrame = 0;
+    let lastClientWidth = el.clientWidth;
+    let idleDrawQueued = false;
+    let cancelIdleDraw: (() => void) | null = null;
+    const skipUnmeasuredClipped = (row: Element) => !isRowHeightLocked(row) && !row.hasAttribute(DRAWN);
+    const runDrawNear = (force = false) => {
       const top = el.scrollTop;
-      if (!stick.current && Date.now() - lastUpGesture.current < GESTURE_MS) {
-        const written = programmaticScroll.current;
-        if (written === null || Math.abs(top - written) > 1) {
-          const shown = visibleAnchor(el);
-          if (shown) {
-            gestureAnchor.current = shown;
-            gestureAnchorAt.current = Date.now();
+      const urgentMargin = Math.max(300, Math.round(el.clientHeight * 0.5));
+      const hasRunway = hasDrawnRunwayAbove(el, drawn.rows, urgentMargin);
+      if (!force && Math.abs(top - drawn.top) < 600 && hasRunway) return;
+      // On WebKitGTK, writing `scrollTop` mid-smooth-wheel animation aborts the remaining wheel delta.
+      // While safe drawn runway remains above the viewport, defer topping up until `scrollend` / wheel idle.
+      if (!force && wheelGlide.current.active && hasRunway) {
+        if (!idleDrawQueued) {
+          idleDrawQueued = true;
+          cancelIdleDraw = whenWheelIdle(() => {
+            idleDrawQueued = false;
+            cancelIdleDraw = null;
+            if (el.isConnected) runDrawNear(true);
+          });
+        }
+        return;
+      }
+      drawn.top = top;
+      // On WebKitGTK, ResizeObserver runs after the frame that draws newly un-skipped rows paints, so any
+      // placeholder→real growth above the viewport would visibly jump for one frame and snap back on the next.
+      // Capture a stable visible anchor before `drawAhead` and restore it synchronously before paint, then seed
+      // `heights` from the already-fresh layout so `hold` never double-applies the same growth.
+      const reading = !stick.current && Date.now() >= autoScrollUntil.current;
+      const anchor = reading ? visibleAnchor(el, { skipClipped: skipUnmeasuredClipped }) : null;
+      const { added, removed } = drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawn.rows, {
+        lockHeights: true,
+      });
+      if ((added.length > 0 || removed.length > 0) && anchor && heights) {
+        const beforeTop = el.scrollTop;
+        const restored = restoreAnchorPosition(el, anchor);
+        if (restored) restoredAnchor.current = restored;
+        if (el.scrollTop !== beforeTop) {
+          programmaticScroll.current = el.scrollTop;
+          markProgrammaticWrite();
+          drawn.top = el.scrollTop;
+          anchorEdge = el.scrollTop;
+        }
+      }
+      if (heights) {
+        for (const row of added) {
+          if (row instanceof HTMLElement) {
+            heights.set(row, row.offsetHeight);
+            measuredRows.add(row);
           }
         }
       }
-      if (Math.abs(top - lastDrawnTop.current) < 600) return;
-      lastDrawnTop.current = top;
-      drawAhead(el, Math.max(DRAW_AHEAD, el.clientHeight), drawn);
     };
-    if (heights) el.addEventListener("scroll", drawNear, { passive: true });
+    const drawNear = () => {
+      const top = el.scrollTop;
+      if (top > anchorEdge) anchorEdge = top;
+      else if (anchorEdgeFrame === 0 && typeof requestAnimationFrame === "function") {
+        anchorEdgeFrame = requestAnimationFrame(() => {
+          anchorEdgeFrame = 0;
+          anchorEdge = el.scrollTop;
+        });
+      }
+      if (wheelGlide.current.active) {
+        if (wheelGlide.current.sameTask) {
+          // A scroll event fired synchronously in the same JS task as `wheel` already completed its scroll
+          // (no multi-frame smooth animation is in flight).
+          finishWheelGlide();
+        } else {
+          armWheelFallback();
+          // After a wheel glide finishes, top up the drawn buffer even if the step was shorter than 600px,
+          // so the reader starts every step with a full drawn runway above the viewport.
+          if (!idleDrawQueued && Math.abs(top - drawn.top) >= 200) {
+            idleDrawQueued = true;
+            cancelIdleDraw = whenWheelIdle(() => {
+              idleDrawQueued = false;
+              cancelIdleDraw = null;
+              if (el.isConnected) runDrawNear(true);
+            });
+          }
+        }
+      }
+      runDrawNear(false);
+    };
+    // Background pre-measurement for unmeasured initial rows above the viewport on manual anchoring:
+    // lays out 13-row slices closest-to-viewport first while idle, locks each row's exact content-box height
+    // into `contain-intrinsic-block-size`, and drops `data-drawn` before paint so offscreen rows cost zero
+    // rasterization while eliminating both placeholder jumps and mid-scroll `scrollTop` writes.
+    let premeasureFrame = 0;
+    let premeasureTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelPremeasureWait: (() => void) | null = null;
+    let premeasureScheduled = false;
+    let premeasureStopped = false;
+    const cancelPremeasure = () => {
+      premeasureScheduled = false;
+      cancelAnimationFrame(premeasureFrame);
+      premeasureFrame = 0;
+      clearTimeout(premeasureTimer);
+      premeasureTimer = undefined;
+      cancelPremeasureWait?.();
+      cancelPremeasureWait = null;
+    };
+    const runPremeasureSlice = () => {
+      premeasureScheduled = false;
+      if (premeasureStopped || !heights || !el.isConnected) return;
+      if (wheelGlide.current.active) {
+        cancelPremeasureWait = whenWheelIdle(() => {
+          cancelPremeasureWait = null;
+          schedulePremeasure();
+        });
+        return;
+      }
+      if (stick.current && Date.now() < autoScrollUntil.current) {
+        premeasureTimer = setTimeout(schedulePremeasure, Math.max(16, autoScrollUntil.current - Date.now()));
+        return;
+      }
+      const box = el.getBoundingClientRect();
+      if (!Number.isFinite(box.height) || box.height <= 0 || el.clientHeight <= 0) return;
+      seedVisibleMeasured();
+      // Prime the initial drawn runway above the viewport once layout is live (never during a wheel glide).
+      if (drawn.rows.size === 0 && el.scrollHeight > el.clientHeight) {
+        runDrawNear(true);
+      }
+      // Collect up to one slice of unmeasured `.ac-msg` rows above the viewport, closest-to-viewport first.
+      const children = el.children;
+      const slice: HTMLElement[] = [];
+      let moreAbove = false;
+      for (let i = children.length - 1; i >= 0; i--) {
+        const row = children[i];
+        if (!(row instanceof HTMLElement) || !row.classList.contains("ac-msg")) continue;
+        if (drawn.rows.has(row) || row.hasAttribute(DRAWN) || isRowHeightLocked(row)) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom > box.top) continue;
+        if (slice.length < OLDER_JOIN_CHUNK) slice.push(row);
+        else {
+          moreAbove = true;
+          break;
+        }
+      }
+      if (slice.length === 0) return;
+      const reading = !stick.current && Date.now() >= autoScrollUntil.current;
+      const anchor = reading ? visibleAnchor(el, { skipClipped: skipUnmeasuredClipped }) : null;
+      const beforeTop = el.scrollTop;
+      for (const row of slice) row.setAttribute(DRAWN, "");
+      const locked = lockRowHeights(slice);
+      for (const row of slice) {
+        heights.set(row, row.offsetHeight);
+        if (locked > 0) measuredRows.add(row);
+        if (!drawn.rows.has(row)) row.removeAttribute(DRAWN);
+      }
+      if (stick.current) {
+        el.scrollTop = el.scrollHeight;
+        programmaticScroll.current = el.scrollTop;
+        markProgrammaticWrite();
+        drawn.top = el.scrollTop;
+        anchorEdge = el.scrollTop;
+      } else if (anchor) {
+        const restored = restoreAnchorPosition(el, anchor);
+        if (restored) restoredAnchor.current = restored;
+        if (el.scrollTop !== beforeTop) {
+          programmaticScroll.current = el.scrollTop;
+          markProgrammaticWrite();
+          drawn.top += el.scrollTop - beforeTop;
+          anchorEdge = el.scrollTop;
+        }
+      }
+      if (locked === 0) return;
+      if (moreAbove) schedulePremeasure();
+    };
+    const schedulePremeasure = () => {
+      if (premeasureStopped || premeasureScheduled || !heights || typeof requestAnimationFrame !== "function") return;
+      premeasureScheduled = true;
+      premeasureFrame = requestAnimationFrame(() => {
+        premeasureFrame = 0;
+        premeasureTimer = setTimeout(runPremeasureSlice, 0);
+      });
+    };
+    const onScrollEnd = () => {
+      const g = wheelGlide.current;
+      if (!g.active) return;
+      // WebKitGTK queues `scrollend` asynchronously after a programmatic `scrollTop` write (such as `follow` or
+      // `premeasure`). Ignore a stale `scrollend` arriving right after our own write so it cannot end a newly
+      // started wheel glide early.
+      if (Date.now() - g.lastProgrammaticAt < 60) return;
+      finishWheelGlide();
+    };
+    if (heights) {
+      el.addEventListener("scroll", drawNear, { passive: true });
+      el.addEventListener("scrollend", onScrollEnd, { passive: true });
+      seedVisibleMeasured();
+      schedulePremeasure();
+    }
+    const wheelHolds = new Map<Element, ResizeObserverEntry>();
+    let wheelHoldQueued = false;
     const hold = (entries: ResizeObserverEntry[]) => {
       if (!heights) return;
+      if (wheelGlide.current.active) {
+        for (const entry of entries) wheelHolds.set(entry.target, entry);
+        if (!wheelHoldQueued) {
+          wheelHoldQueued = true;
+          whenWheelIdle(() => {
+            wheelHoldQueued = false;
+            if (!el.isConnected || wheelHolds.size === 0) return;
+            const pending = [...wheelHolds.values()];
+            wheelHolds.clear();
+            hold(pending);
+          });
+        }
+        return;
+      }
+      const widthNow = el.clientWidth;
+      if (widthNow > 0 && lastClientWidth > 0 && widthNow !== lastClientWidth) {
+        lastClientWidth = widthNow;
+        clearLockedRowHeights(el);
+        schedulePremeasure();
+      } else if (widthNow > 0) {
+        lastClientWidth = widthNow;
+        if (drawn.rows.size === 0 && el.scrollHeight > el.clientHeight) schedulePremeasure();
+      }
       const saved = restoredAnchor.current;
       restoredAnchor.current = null;
       const restored = saved && el.contains(saved.row) ? saved : null;
@@ -2109,20 +2419,35 @@ function ChannelView({
         if (!(target instanceof HTMLElement) || target.parentElement !== el) continue;
         const before = heights.get(target);
         const after = target.offsetHeight;
+        const wasMeasured = measuredRows.has(target) || isRowHeightLocked(target);
         heights.set(target, after);
         // Laid out whole once: it may be skipped now, at the height it remembers (layout.css).
         if (before === undefined) target.dataset.sized = "";
-        if (reading && !restored && before !== undefined && before !== after) {
-          listTop ??= el.getBoundingClientRect().top - scrollTop;
-          resized.push({ top: target.getBoundingClientRect().top - listTop, before, after });
+        if (before !== undefined && before !== after) {
+          // If a row's locked height changed while drawn/visible (e.g. "Ver mais", card load), refresh its lock.
+          if (target.classList.contains("ac-msg") && isRowHeightLocked(target)) lockRowHeights([target]);
+          if (target.classList.contains("ac-msg") && after > 0) measuredRows.add(target);
+          if (reading && !restored) {
+            listTop ??= el.getBoundingClientRect().top - scrollTop;
+            resized.push({
+              top: target.getBoundingClientRect().top - listTop,
+              before,
+              after,
+              fromPlaceholder: !wasMeasured,
+            });
+          }
         }
       }
       if (!reading) return;
       // The page restoration already covered resizes delivered in this batch. Only move for changes since then.
       const shift = restored
         ? restored.row.getBoundingClientRect().top - el.getBoundingClientRect().top + scrollTop - restored.contentTop
-        : anchorShift(resized, scrollTop);
-      if (shift !== 0) scrollNow(el, scrollTop + shift);
+        : anchorShift(resized, scrollTop, anchorEdge);
+      if (shift !== 0) {
+        scrollShift(el, shift);
+        drawn.top += shift;
+      }
+      anchorEdge = el.scrollTop;
     };
     // What stands above the list folding away (the day's greeting, a bar) moves its top edge up: read further up, the
     // words on screen stay where they are. Only up: what appears above it as the conversation opens is where the
@@ -2133,7 +2458,7 @@ function ChannelView({
     const keep = () => {
       const now = edge();
       if (now < top && !stick.current && Date.now() >= autoScrollUntil.current) {
-        scrollNow(el, el.scrollTop - (top - now));
+        scrollShift(el, -(top - now));
       }
       top = now;
     };
@@ -2149,19 +2474,40 @@ function ChannelView({
       typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver((records) => {
+            let addedUnmeasured = false;
             for (const record of records) {
               for (const node of record.removedNodes) if (node instanceof Element) ro.unobserve(node);
-              for (const node of record.addedNodes) if (node instanceof Element) ro.observe(node);
+              for (const node of record.addedNodes) {
+                if (node instanceof Element) {
+                  ro.observe(node);
+                  if (
+                    heights &&
+                    node.classList.contains("ac-msg") &&
+                    !node.hasAttribute(DRAWN) &&
+                    !isRowHeightLocked(node)
+                  ) {
+                    addedUnmeasured = true;
+                  }
+                }
+              }
             }
+            if (addedUnmeasured) schedulePremeasure();
           });
     mo?.observe(el, { childList: true });
     return () => {
+      premeasureStopped = true;
+      cancelPremeasure();
+      cancelIdleDraw?.();
+      cancelAnimationFrame(anchorEdgeFrame);
+      finishWheelGlide();
       restoredAnchor.current = null;
       clearTimeout(later);
       el.removeEventListener("scroll", drawNear);
+      el.removeEventListener("scrollend", onScrollEnd);
       ro.disconnect();
       mo?.disconnect();
-      for (const row of drawn) row.removeAttribute(DRAWN);
+      for (const row of drawn.rows) row.removeAttribute(DRAWN);
+      drawn.rows.clear();
     };
   }, [isMember, manualAnchor]);
   const lastKey = timeline.at(-1)?.key;
@@ -2170,13 +2516,12 @@ function ChannelView({
   const toBottom = (smooth = false) => {
     // Away from the latest page: back to it.
     if (gap) {
+      cancelOlderChunks();
       olderRequest.current += 1;
       newerRequest.current += 1;
       olderBusy.current = false;
-      setStagedOlder(null);
       setGap(false);
-      setOlderWindow({ pages: [], prepended: false });
-      setOlderState("idle");
+      setOlderWindow({ pages: [], joined: null, status: "idle" });
     }
     markRead();
     setFar(false);
@@ -2447,8 +2792,20 @@ function ChannelView({
   // Any new page of data (first load, refetch, cache → server) re-pins while at the bottom,
   // without waiting for observers (some environments have none).
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the data changes
+  const wheelFollowQueued = useRef(false);
   useLayoutEffect(() => {
-    if (stick.current && Date.now() >= autoScrollUntil.current) follow();
+    if (!stick.current || Date.now() < autoScrollUntil.current) return;
+    if (wheelGlide.current.active) {
+      if (!wheelFollowQueued.current) {
+        wheelFollowQueued.current = true;
+        whenWheelIdle(() => {
+          wheelFollowQueued.current = false;
+          if (stick.current) follow();
+        });
+      }
+      return;
+    }
+    follow();
   }, [messages.dataUpdatedAt, timeline.length]);
 
   // `?m=` (or a quote clicked): the message on screen, or the page around it read from the server at any distance;
@@ -3170,6 +3527,7 @@ function ChannelView({
                             aria-relevant="additions"
                             onWheel={(e) => {
                               markScrollGesture();
+                              if (e.deltaY !== 0) markWheelGlide();
                               if (e.deltaY < 0) {
                                 markUpGesture();
                                 letGo();
@@ -3177,10 +3535,10 @@ function ChannelView({
                             }}
                             onTouchMove={() => {
                               markScrollGesture();
-                              markUpGesture();
+                              markUpGesture(true);
                             }}
                             // On the list itself, not on a row: its scrollbar.
-                            onPointerDown={(e) => (e.target === e.currentTarget ? markUpGesture() : markGesture())}
+                            onPointerDown={(e) => (e.target === e.currentTarget ? markUpGesture(true) : markGesture())}
                             onKeyDown={(e) => (isScrollUpKey(e) ? markUpGesture() : markGesture())}
                             onScroll={(e) => {
                               const previousTop = lastScrollTop.current;
@@ -3188,9 +3546,6 @@ function ChannelView({
                               measureFar(e.currentTarget);
                               const ours = scrollByOurselves(e.currentTarget);
                               if (!ours) stopSettle();
-                              // A real scroll event is motion even when a scrollbar drag had no wheel/touch/key event.
-                              if (!ours && previousTop !== null && e.currentTarget.scrollTop !== previousTop)
-                                olderMotionAt.current = Date.now();
                               // Only the person scrolling unpins (or loads older pages); layout changes never do.
                               const byPerson = !ours && Date.now() - lastGesture.current < GESTURE_MS;
                               // A drag selecting text past the top edge scrolls up too: the person is reading.
@@ -3218,9 +3573,10 @@ function ChannelView({
                               }
                               const near = nearBottom(e.currentTarget);
                               if (!near && (!byPerson || Date.now() < autoScrollUntil.current)) return;
-                              // Pinned again only when the person comes back down, not by layout.
+                              // Pinned again only when the person comes back down, not by layout or an upward wheel.
                               const movedDown = previousTop !== null && e.currentTarget.scrollTop > previousTop;
-                              if (near && !stick.current && !(byPerson && movedDown)) return;
+                              const downByPerson = byPerson && lastDownGesture.current >= lastUpGesture.current;
+                              if (near && !stick.current && !(downByPerson && movedDown)) return;
                               stick.current = near;
                               if (near) {
                                 clearUnseen();
@@ -3361,7 +3717,10 @@ function ChannelView({
                                   restoredAnchor={manualAnchor ? restoredAnchor : undefined}
                                   programmaticScroll={programmaticScroll}
                                   settleScroll={settleScroll}
-                                  prependedPage={prepended && !gated ? older : undefined}
+                                  wheelGlide={wheelGlide}
+                                  whenWheelIdle={whenWheelIdle}
+                                  prependedPage={joined ?? undefined}
+                                  drawnPool={manualAnchor ? drawnPool : undefined}
                                 />
                                 {repliesPending && (
                                   <LoadingConversation count={Math.min((thread?.replyCount ?? 0) + 1, 6)} />
@@ -3843,34 +4202,161 @@ class ProgressiveAnchor extends Component<{
   restoredAnchor?: RefObject<RestoredAnchor | null>;
   programmaticScroll?: RefObject<number | null>;
   settleScroll?: RefObject<(() => void) | null>;
+  wheelGlide?: RefObject<WheelGlide>;
+  whenWheelIdle?: (fn: () => void) => () => void;
   prependedPage?: readonly MessageType[];
+  /** Present when manual anchoring drives `drawAhead`: joining rows hand off to it after paint. */
+  drawnPool?: RefObject<DrawnPool>;
   children: ReactNode;
 }> {
+  private pendingReleases = new Set<() => void>();
+  private pendingAnchor: (() => void) | null = null;
+
+  // The reader's row is sampled here, the last moment before the commit changes the list: nothing sampled earlier
+  // can be stale by the time the page lands.
   getSnapshotBeforeUpdate(previous: Readonly<this["props"]>): VisibleAnchor | null {
-    const { whole, scroller, stick, restoredAnchor, prependedPage } = this.props;
+    const { whole, scroller, stick, restoredAnchor, prependedPage, drawnPool } = this.props;
     const el = scroller.current;
-    const pageArrived = prependedPage && prependedPage !== previous.prependedPage;
+    const pageArrived = prependedPage && prependedPage !== previous.prependedPage && !stick.current;
     const expanded = restoredAnchor && !previous.whole && whole && !stick.current;
-    return el && (pageArrived || expanded) ? visibleAnchor(el) : null;
+    if (!el || (!pageArrived && !expanded)) return null;
+    return drawnPool
+      ? visibleAnchor(el, { skipClipped: (row) => !isRowHeightLocked(row) && !row.hasAttribute(DRAWN) })
+      : visibleAnchor(el);
   }
 
-  componentDidUpdate(_previous: Readonly<this["props"]>, _state: unknown, anchor: VisibleAnchor | null) {
-    const { scroller, restoredAnchor, programmaticScroll, settleScroll } = this.props;
+  componentDidUpdate(previous: Readonly<this["props"]>, _state: unknown, anchor: VisibleAnchor | null) {
+    const {
+      scroller,
+      stick,
+      restoredAnchor,
+      programmaticScroll,
+      settleScroll,
+      wheelGlide,
+      whenWheelIdle,
+      prependedPage,
+      drawnPool,
+    } = this.props;
     const el = scroller.current;
-    if (!el || !anchor) return;
-    const restored = restoreAnchorPosition(el, anchor);
-    if (restoredAnchor) restoredAnchor.current = restored;
-    if (programmaticScroll) programmaticScroll.current = el.scrollTop;
-    settleScroll?.current?.();
-    const stop = settleAnchor(el, anchor, (top) => {
-      el.scrollTop = top;
+    if (!el) return;
+    const pageArrived = Boolean(prependedPage && prependedPage !== previous.prependedPage);
+    // The page is older than what a person at the end is reading: keep them at the end in this commit.
+    if (pageArrived && stick.current) {
+      const keepPinned = () => {
+        this.pendingAnchor = null;
+        if (!el.isConnected || !stick.current) return;
+        el.scrollTop = el.scrollHeight;
+        if (programmaticScroll) programmaticScroll.current = el.scrollTop;
+        if (drawnPool) drawnPool.current.top = el.scrollTop;
+      };
+      if (wheelGlide?.current.active) {
+        this.pendingAnchor?.();
+        this.pendingAnchor = whenWheelIdle?.(keepPinned) ?? null;
+        return;
+      }
+      keepPinned();
+      return;
+    }
+    if (!anchor) return;
+    // A page committed at the 56px placeholder height (`content-visibility`) cannot know how tall it is: its rows
+    // would grow after paint and move the reader's row once per row. Drawn, every row of the page has its real
+    // height now, so the one restore below lands on a truthful list. Once that frame finishes rendering and the
+    // browser records each row's real height (`contain-intrinsic-size: auto`), far rows are let go without shrinking.
+    // If WebKitGTK ever hitches on laying out a full 50-row page at once, the fallback is drawing it in two or three
+    // chunks over consecutive frames, each above the viewport with its own anchor; one commit is enough today.
+    let joined: Element[] | null = null;
+    if (pageArrived && prependedPage) {
+      const ids = new Set(prependedPage.map((m) => m.id));
+      joined = [];
+      let lastJoined: Element | null = null;
+      for (const row of el.children) {
+        const id = row.getAttribute("data-message-id");
+        if (!id || !ids.has(id)) continue;
+        row.setAttribute(DRAWN, "");
+        joined.push(row);
+        lastJoined = row;
+        if (joined.length === ids.size) break;
+      }
+      // The first previously existing message immediately below the joined slice may switch between
+      // ungrouped and grouped (or change sibling spacing) once its predecessor arrives. Drawing it
+      // for this commit lets `contain-intrinsic-size: auto` record its updated height now instead
+      // of shrinking later when scrolled into view.
+      let boundary = lastJoined?.nextElementSibling ?? null;
+      while (boundary && !boundary.classList.contains("ac-msg")) boundary = boundary.nextElementSibling;
+      if (boundary && !boundary.hasAttribute(DRAWN)) {
+        boundary.setAttribute(DRAWN, "");
+        joined.push(boundary);
+      }
+    }
+    // Lock each newly joined row's real content-box height immediately from the already-fresh layout so
+    // `drawNear` and `scheduleRelease` never let WebKitGTK shrink it back to placeholder.
+    if (joined && drawnPool) lockRowHeights(joined);
+    if (joined && joined.length > 0) this.scheduleRelease(el, joined, drawnPool);
+    const beforeTop = el.scrollTop;
+    const restore = () => {
+      this.pendingAnchor = null;
+      if (!el.isConnected) return;
+      // The person may have wheeled while the prepend waited: keep that delta on top of the anchor.
+      const adjusted = { row: anchor.row, top: anchor.top + (el.scrollTop - beforeTop) };
+      const restored = restoreAnchorPosition(el, adjusted);
+      if (restoredAnchor) restoredAnchor.current = restored;
       if (programmaticScroll) programmaticScroll.current = el.scrollTop;
+      if (joined && drawnPool) {
+        // Shift `drawnPool.top` by the prepend's own delta instead of resetting it to `el.scrollTop`, so the
+        // restore's scroll event is ignored without erasing how far the reader had already scrolled up.
+        drawnPool.current.top += el.scrollTop - beforeTop;
+      }
+      settleScroll?.current?.();
+      const settleTarget = restored ? { row: adjusted.row, top: restored.top } : adjusted;
+      const stop = settleAnchor(el, settleTarget, (top) => {
+        shiftScrollTop(el, top - el.scrollTop);
+        if (programmaticScroll) programmaticScroll.current = el.scrollTop;
+        // Keep `restoredAnchor` in sync with any settle correction so ResizeObserver `hold` does not
+        // apply the same height growth a second time in the same frame.
+        if (restoredAnchor && el.contains(adjusted.row)) {
+          const curTop = adjusted.row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+          restoredAnchor.current = { row: adjusted.row, contentTop: curTop + el.scrollTop, top: curTop };
+        }
+      });
+      if (settleScroll) settleScroll.current = stop;
+    };
+    if (wheelGlide?.current.active) {
+      this.pendingAnchor?.();
+      this.pendingAnchor = whenWheelIdle?.(restore) ?? null;
+      return;
+    }
+    restore();
+  }
+
+  private scheduleRelease(el: HTMLElement, joined: Element[], drawnPool?: RefObject<DrawnPool>) {
+    let frame = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      this.pendingReleases.delete(cancel);
+    };
+    this.pendingReleases.add(cancel);
+    // `contain-intrinsic-size: auto` records each row's real height during the frame's rendering (after animation
+    // callbacks), so releasing waits for a task after that frame. Where manual anchoring is active (`drawnPool`),
+    // re-lock each released row's exact content-box height in `contain-intrinsic-block-size` right before dropping
+    // `data-drawn` so WebKitGTK never shrinks `scrollHeight` even if its native remembered size was dropped.
+    frame = requestAnimationFrame(() => {
+      timer = setTimeout(() => {
+        this.pendingReleases.delete(cancel);
+        if (!el.isConnected) return;
+        const held = drawnPool?.current.rows;
+        const toRelease = joined.filter((row) => !held?.has(row));
+        if (drawnPool && toRelease.length > 0) lockRowHeights(toRelease);
+        for (const row of toRelease) row.removeAttribute(DRAWN);
+      }, 0);
     });
-    if (settleScroll) settleScroll.current = stop;
   }
 
   componentWillUnmount() {
+    this.pendingAnchor?.();
     this.props.settleScroll?.current?.();
+    for (const cancel of this.pendingReleases) cancel();
   }
 
   render() {
@@ -3906,7 +4392,10 @@ const Timeline = memo(function Timeline({
   restoredAnchor,
   programmaticScroll,
   settleScroll,
+  wheelGlide,
+  whenWheelIdle,
   prependedPage,
+  drawnPool,
 }: {
   items: ReturnType<typeof buildTimeline>;
   directory: Directory;
@@ -3938,7 +4427,10 @@ const Timeline = memo(function Timeline({
   restoredAnchor?: RefObject<RestoredAnchor | null>;
   programmaticScroll?: RefObject<number | null>;
   settleScroll?: RefObject<(() => void) | null>;
+  wheelGlide?: RefObject<WheelGlide>;
+  whenWheelIdle?: (fn: () => void) => () => void;
   prependedPage?: readonly MessageType[];
+  drawnPool?: RefObject<DrawnPool>;
 }) {
   const { t, i18n } = useTranslation();
   // A conversation opening at its end shows its last rows: they are drawn first and the rest in a transition, which
@@ -4173,7 +4665,10 @@ const Timeline = memo(function Timeline({
         restoredAnchor={restoredAnchor}
         programmaticScroll={programmaticScroll}
         settleScroll={settleScroll}
+        wheelGlide={wheelGlide}
+        whenWheelIdle={whenWheelIdle}
         prependedPage={prependedPage}
+        drawnPool={drawnPool}
       >
         <ConsultGroupsProvider value={consultGroups}>
           <StopsProvider value={stops}>
@@ -5303,6 +5798,7 @@ export const TimelineMessage = memo(function TimelineMessage({
       <Message
         agent={m.author.type === "agent"}
         data-message-id={live ? undefined : m.id}
+        data-question={question ? "" : undefined}
         data-run-id={live?.runId}
         data-live={live?.status}
         // What someone else wrote (an agent's answer, a teammate's message): lands at its start when long, read

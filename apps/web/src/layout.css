@@ -1242,9 +1242,10 @@ html:not([data-pointer]) .sidebar__user:focus-visible {
 .channel__messages[data-manual-anchor] {
   overflow-anchor: none;
 }
-/* …and a row skipped at its placeholder grows as its last pixels cross the top edge, in the frame that is painted:
-   the ones near the screen are drawn ahead (`chat/draw-ahead.ts`). */
-.channel__messages[data-manual-anchor] > .ac-msg[data-drawn] {
+/* A row skipped at its placeholder grows as its last pixels cross the top edge, in the frame that is painted:
+   joining older pages are drawn at their real height on arrival (`ProgressiveAnchor`), and where anchoring is manual
+   the rows near the screen are also drawn ahead (`chat/draw-ahead.ts`). */
+.channel__messages > .ac-msg[data-drawn] {
   content-visibility: visible;
 }
 /* A message that @mentions the viewer: a tinted row, its corners all round. No accent bar on its left edge: the tint
@@ -3636,16 +3637,17 @@ html:not([data-pointer]) .profile-trigger:focus-visible {
    "só responde a" note sat 25px from the bar and the button around it, its gap 12. The kit does the same in its cards
    and forms; a class with margins of its own keeps them. */
 :where(
-  .profile-card__body,
-  .stack-4,
-  .skill-sheet__main,
-  .skill-history,
-  .wiki-editor,
-  .cal-side__section,
-  .cflow__key,
-  .cflow__headers,
-  .imp-block
-) > :where(p, ul, ol) {
+    .profile-card__body,
+    .stack-4,
+    .skill-sheet__main,
+    .skill-history,
+    .wiki-editor,
+    .cal-side__section,
+    .cflow__key,
+    .cflow__headers,
+    .imp-block
+  )
+  > :where(p, ul, ol) {
   margin-block: 0;
 }
 .profile-card__head {
@@ -4774,7 +4776,7 @@ html:not([data-pointer]) .settings__link:focus-visible {
 }
 /* A text field of several lines (the right hand's guidance) keeps its rows: the kit's `textarea.ac-input` sizes it. */
 .settings-row
-:is(.ac-select__trigger, .ac-input:not(textarea), .ac-input-affix, .ac-btn:not(.ac-btn--glyph, .ac-btn--icon)) {
+  :is(.ac-select__trigger, .ac-input:not(textarea), .ac-input-affix, .ac-btn:not(.ac-btn--glyph, .ac-btn--icon)) {
   height: var(--control-h-sm);
 }
 .settings-row:first-child {
@@ -6572,7 +6574,7 @@ html:not([data-pointer]) .tr-ok:focus-visible {
 }
 .channel__messages .ac-msg {
   content-visibility: auto;
-  contain-intrinsic-size: auto 56px;
+  contain-intrinsic-size: auto 24px;
 }
 /*
  * With no scroll anchoring (`data-manual-anchor`: Safari, the desktop app on macOS, iPhones), a row is drawn whole until
@@ -15280,8 +15282,9 @@ html:not([data-pointer]) .app-icons__agent:focus-visible {
      choice of several): the status under the name at the row's full width, the control under the status, from the
      words' edge. A button keeps the name's line (`.settings-row--button`). */
   .settings-row--lead:not(.settings-row--open, .settings-row--button, :has(> .settings-row__end > .ac-switch)):has(
-    > .settings-row__end
-  ) > .settings-row__text:has(> .settings-row__status) {
+      > .settings-row__end
+    )
+    > .settings-row__text:has(> .settings-row__status) {
     display: contents;
   }
   .settings-row--lead:not(.settings-row--open, .settings-row--button, :has(> .settings-row__end > .ac-switch)):has(

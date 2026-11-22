@@ -20,7 +20,7 @@ import { can } from "@agenteschat/client/lib/permissions";
 import { type ReachEntry, reachKey, reachOf, reachOpens } from "@agenteschat/client/lib/reach";
 import { joinsChannels } from "@agenteschat/client/lib/right-hand";
 import { Button, Dialog, DialogFooter, Icon } from "@agenteschat/ui";
-import { type SyntheticEvent, useState } from "react";
+import { type SyntheticEvent, useLayoutEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { ConsultPairRow, useConsultById } from "@/components/ConsultGroup";
 import { useOrg } from "@/components/org-context";
@@ -40,12 +40,43 @@ export function ReachLines({ message }: { message: Message }) {
   const { org } = useOrg();
   const channelName = useChannelName(org.id, message.channelId);
   const list = reachOf(message.meta);
+  const groupRef = useRef<HTMLDivElement>(null);
+  const lastEntry = list.at(-1);
+  const lastTalk = useConsultById(
+    message.channelId,
+    lastEntry && reachOpens(lastEntry) ? lastEntry.consultationId : undefined,
+  );
+  // Keep `data-ends-talk` on the message row when this group is the last visible child of `.ac-msg__body`
+  // and ends on `.ag-rc--talk`. Replacing `:has(...) + *` on `.channel__messages > .ac-msg` avoids quadratic
+  // sibling style invalidation in WebKitGTK when prepending older pages.
+  useLayoutEffect(() => {
+    if (list.length === 0) return;
+    const group = groupRef.current;
+    const msg = group?.closest(".ac-msg");
+    if (!group || !msg) return;
+    let endsTalk = Boolean(lastTalk);
+    if (endsTalk) {
+      let next = group.nextElementSibling;
+      while (next) {
+        if (!next.classList.contains("ac-msg__actions") && !next.classList.contains("ac-visually-hidden")) {
+          endsTalk = false;
+          break;
+        }
+        next = next.nextElementSibling;
+      }
+    }
+    if (endsTalk) msg.setAttribute("data-ends-talk", "");
+    else msg.removeAttribute("data-ends-talk");
+    return () => {
+      msg.removeAttribute("data-ends-talk");
+    };
+  }, [lastTalk, list.length]);
   if (message.author.type !== "agent" || list.length === 0) return null;
   // A DM isn't in the channel list: "in this conversation", and nobody can be added to it.
   const place = channelName !== undefined ? t("reach.inChannel", { name: channelName }) : t("reach.inHere");
   return (
     // biome-ignore lint/a11y/useSemanticElements: a labelled group inside a message, not a fieldset
-    <div className="ag-rcs ag-rcs--stack" role="group" aria-label={t("reach.group")}>
+    <div ref={groupRef} className="ag-rcs ag-rcs--stack" role="group" aria-label={t("reach.group")}>
       {list.map((e) => (
         <ReachRow
           key={e.agentId}

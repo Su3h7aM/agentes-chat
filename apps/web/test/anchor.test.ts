@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { anchorShift, settleAnchor, topInList, visibleAnchor } from "@/chat/anchor";
+import {
+  anchorShift,
+  restoreAnchorPosition,
+  settleAnchor,
+  shiftScrollTop,
+  topInList,
+  visibleAnchor,
+} from "@/chat/anchor";
 
 describe("the list holds its place without scroll anchoring", () => {
   test("a row above the top edge that grows from its placeholder moves the list by as much", () => {
@@ -34,6 +41,29 @@ describe("the list holds its place without scroll anchoring", () => {
   test("nothing changed, nothing moves", () => {
     expect(anchorShift([], 1000)).toBe(0);
     expect(anchorShift([{ top: 10, before: 80, after: 80 }], 1000)).toBe(0);
+  });
+
+  test("an unmeasured placeholder straddling or crossing the top edge on scroll-up is compensated", () => {
+    // A 56px placeholder straddling scrollTop (980..1036 across 1000) expands to 320px.
+    expect(anchorShift([{ top: 980, before: 56, after: 320, fromPlaceholder: true }], 1000)).toBe(264);
+    // A 93px upward step (1000 -> 907) brings a 56px placeholder [940, 996] inside the top edge; anchorEdge=1000 holds
+    // the visible conversation below it at +93px instead of jumping +292px.
+    expect(anchorShift([{ top: 940, before: 56, after: 255, fromPlaceholder: true }], 907, 1000)).toBe(199);
+    // Multiple placeholders expanding in one batch accumulate accurately.
+    expect(
+      anchorShift(
+        [
+          { top: 1140, before: 56, after: 255, fromPlaceholder: true },
+          { top: 884, before: 56, after: 256, fromPlaceholder: true },
+        ],
+        907,
+        1000,
+      ),
+    ).toBe(399);
+    // Scrolling down into a placeholder at the bottom edge (1650..1706) never shifts scrollTop.
+    expect(anchorShift([{ top: 1650, before: 56, after: 255, fromPlaceholder: true }], 1093, 1000)).toBe(0);
+    // An already-drawn row straddling the top edge (e.g. clicking "Ver mais") still grows downward in place.
+    expect(anchorShift([{ top: 980, before: 480, after: 1200, fromPlaceholder: false }], 1000)).toBe(0);
   });
 });
 
@@ -127,6 +157,169 @@ describe("a visible row settles after layout moves it", () => {
     frames.run();
     frames.run();
     expect(frames.pending()).toBe(0);
+  });
+
+  test("compositor smooth-scrolling without layout change stops settling instead of pulling the reader back", () => {
+    const contentTop = 3198;
+    const list = {
+      scrollTop: 3148,
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 0 }),
+    } as unknown as HTMLElement;
+    const row = {
+      getBoundingClientRect: () => ({ top: contentTop - list.scrollTop }),
+    } as unknown as Element;
+    const frames = frameQueue();
+    let writes = 0;
+    settleAnchor(
+      list,
+      { row, top: 50 },
+      (top) => {
+        writes += 1;
+        list.scrollTop = top;
+      },
+      { frame: frames.frame },
+    );
+
+    // Compositor wheel momentum moves scrollTop up without a new DOM wheel event; layout did not move.
+    list.scrollTop = 2971;
+    frames.run();
+    expect(writes).toBe(0);
+    expect(list.scrollTop).toBe(2971);
+    expect(frames.pending()).toBe(0);
+  });
+
+  test("if both compositor scroll and layout shift occur in the same frame, only the layout shift is compensated", () => {
+    let contentTop = 3198;
+    const list = {
+      scrollTop: 3148,
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 0 }),
+    } as unknown as HTMLElement;
+    const row = {
+      getBoundingClientRect: () => ({ top: contentTop - list.scrollTop }),
+    } as unknown as Element;
+    const frames = frameQueue();
+    settleAnchor(list, { row, top: 50 }, (top) => (list.scrollTop = top), { frame: frames.frame });
+
+    // Reader wheeled up 177px AND layout above grew 35px in the same frame.
+    list.scrollTop = 2971;
+    contentTop += 35;
+    frames.run();
+    expect(list.scrollTop).toBe(3006);
+    expect(frames.pending()).toBe(0);
+  });
+});
+
+describe("shiftScrollTop and restoreAnchorPosition handle rounding and compositor flushes", () => {
+  test("rounds fractional targets instead of truncating downward across successive slices", () => {
+    let st = 1000;
+    const list = {
+      scrollHeight: 10000,
+      clientHeight: 500,
+      get scrollTop() {
+        return st;
+      },
+      set scrollTop(v: number) {
+        st = Math.trunc(v);
+      },
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 0 }),
+    } as unknown as HTMLElement;
+    const row = {
+      getBoundingClientRect: () => ({ top: 50 + 1316.7 }),
+    } as unknown as Element;
+    const restored = restoreAnchorPosition(list, { row, top: 50 });
+    expect(st).toBe(2317);
+    expect(restored?.top).toBe(50);
+  });
+
+  test("recovers synchronously when WebKitGTK flushes an in-flight compositor scroll on the first write", () => {
+    let st = 1407;
+    let firstWrite = true;
+    const list = {
+      scrollHeight: 20000,
+      clientHeight: 500,
+      get scrollTop() {
+        return st;
+      },
+      set scrollTop(v: number) {
+        if (firstWrite) {
+          // Engine flushes a pending -364px compositor wheel scroll and discards `v`.
+          firstWrite = false;
+          st = 1043;
+        } else {
+          st = Math.max(0, Math.min(Math.trunc(v), 19500));
+        }
+      },
+      contains: () => true,
+      getBoundingClientRect: () => ({ top: 0 }),
+    } as unknown as HTMLElement;
+    const row = {
+      // Content grew +1509.2px above anchor.row (was at 50, now at 1559.2 while st is 1407).
+      getBoundingClientRect: () => ({ top: 1559.2 }),
+    } as unknown as Element;
+    const restored = restoreAnchorPosition(list, { row, top: 50 });
+    // Preserves the reader's -364px wheel motion AND compensates the +1509.2px growth synchronously.
+    expect(st).toBe(2552);
+    expect(restored?.contentTop).toBeCloseTo(2966.2, 1);
+    expect(restored?.top).toBe(414);
+  });
+
+  test("does not retry when scrollTop lands at target (unclamped mock) or clamps at maxScroll", () => {
+    let writes = 0;
+    let st = 1000;
+    const unclamped = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      get scrollTop() {
+        return st;
+      },
+      set scrollTop(v: number) {
+        writes += 1;
+        st = v;
+      },
+    } as unknown as HTMLElement;
+    expect(shiftScrollTop(unclamped, 1000)).toBe(0);
+    expect(st).toBe(2000);
+    expect(writes).toBe(1);
+
+    writes = 0;
+    st = 1000;
+    const clamped = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      get scrollTop() {
+        return st;
+      },
+      set scrollTop(v: number) {
+        writes += 1;
+        st = Math.min(v, 1500);
+      },
+    } as unknown as HTMLElement;
+    expect(shiftScrollTop(clamped, 1000)).toBe(0);
+    expect(st).toBe(1500);
+    expect(writes).toBe(1);
+  });
+
+  test("ignores sub-pixel deltas even when scrollTop is fractional mid-smooth-wheel animation", () => {
+    let writes = 0;
+    let st = 7541.33;
+    const list = {
+      scrollHeight: 20000,
+      clientHeight: 600,
+      get scrollTop() {
+        return st;
+      },
+      set scrollTop(v: number) {
+        writes += 1;
+        st = v;
+      },
+    } as unknown as HTMLElement;
+    expect(shiftScrollTop(list, 0.2)).toBe(0);
+    expect(shiftScrollTop(list, -0.4)).toBe(0);
+    expect(writes).toBe(0);
+    expect(st).toBe(7541.33);
   });
 });
 
@@ -228,6 +421,22 @@ describe("the visible row is found without reading every row", () => {
     const anchor = visibleAnchor(view.element);
     expect(anchor?.row).toBe(view.rows[1]?.element);
     expect(anchor?.top).toBe(200);
+  });
+
+  test("skipClipped bypasses a top-clipped unmeasured row in favor of the next visible message", () => {
+    const view = layout([
+      { top: 70, height: 56, classes: ["ac-msg"] }, // clipped at top (box.top = 100)
+      { top: 126, height: 120, classes: ["ac-msg"] }, // starts inside viewport
+    ]);
+    const clipped = view.rows[0]?.element;
+    const anchor = visibleAnchor(view.element, { skipClipped: (row) => row === clipped });
+    expect(anchor?.row).toBe(view.rows[1]?.element);
+    expect(anchor?.top).toBe(26);
+    // Falls back to the clipped row when it is the only visible message.
+    const single = layout([{ top: 50, height: 500, classes: ["ac-msg"] }]);
+    const only = visibleAnchor(single.element, { skipClipped: () => true });
+    expect(only?.row).toBe(single.rows[0]?.element);
+    expect(only?.top).toBe(-50);
   });
 });
 

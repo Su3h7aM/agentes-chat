@@ -13,6 +13,8 @@ export interface RowResize {
   top: number;
   before: number;
   after: number;
+  /** True when the row expanded from an unmeasured `content-visibility: auto` placeholder rather than an already-drawn row. */
+  fromPlaceholder?: boolean;
 }
 
 export interface VisibleAnchor {
@@ -20,9 +22,20 @@ export interface VisibleAnchor {
   top: number;
 }
 
+export interface VisibleAnchorOptions {
+  /**
+   * When provided, a top-clipped message row (`rect.top < box.top`) for which this returns `true` (e.g. an
+   * unmeasured placeholder about to expand) is skipped in favor of the next visible message row starting inside
+   * the viewport, falling back to the clipped row only if no other message is visible.
+   */
+  skipClipped?: (row: Element) => boolean;
+}
+
 export interface RestoredAnchor {
   row: Element;
   contentTop: number;
+  /** The row's visual top after restore (`anchor.top`, adjusted if the engine flushed a user scroll during the write). */
+  top: number;
 }
 
 export interface SettleAnchorOptions {
@@ -34,7 +47,8 @@ const SETTLE_STABLE_FRAMES = 2;
 /** A page reveal is short; a reply that keeps moving the end has its own follow logic. */
 const SETTLE_MAX_FRAMES = 60;
 
-export function visibleAnchor(list: HTMLElement): VisibleAnchor | null {
+export function visibleAnchor(list: HTMLElement, options?: VisibleAnchorOptions): VisibleAnchor | null {
+  const skipClipped = options?.skipClipped;
   const box = list.getBoundingClientRect();
   const rows = list.children;
   const rects = new Map<number, DOMRect>();
@@ -107,15 +121,16 @@ export function visibleAnchor(list: HTMLElement): VisibleAnchor | null {
     }
   }
 
-  const found = visibleFrom(rows, box, ordered ? low : 0, ordered);
+  const found = visibleFrom(rows, box, ordered ? low : 0, ordered, skipClipped);
   if (!found) return null;
   if (ordered && found.index > 0) {
     const before = rows[found.index - 1];
     if (!before) return found.anchor;
     const rect = before.getBoundingClientRect();
     // A message above the one the search found is visible too: the search read a gap, not the front of the window.
-    if (before.classList.contains("ac-msg") && visible(rect, box))
-      return visibleFrom(rows, box, 0, false)?.anchor ?? null;
+    const skipped = rect.top < box.top && Boolean(skipClipped?.(before));
+    if (before.classList.contains("ac-msg") && visible(rect, box) && !skipped)
+      return visibleFrom(rows, box, 0, false, skipClipped)?.anchor ?? null;
   }
   return found.anchor;
 }
@@ -140,9 +155,11 @@ function visibleFrom(
   box: DOMRect,
   from: number,
   ordered: boolean,
+  skipClipped?: (row: Element) => boolean,
 ): { anchor: VisibleAnchor; index: number } | null {
   let first: VisibleAnchor | null = null;
   let firstIndex = -1;
+  let clippedMsg: { anchor: VisibleAnchor; index: number } | null = null;
   for (let i = from; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
@@ -153,21 +170,54 @@ function visibleFrom(
       continue;
     }
     const anchor = { row, top: rect.top - box.top };
-    if (row.classList.contains("ac-msg")) return { anchor, index: i };
+    if (row.classList.contains("ac-msg")) {
+      if (rect.top < box.top && skipClipped?.(row)) {
+        clippedMsg ??= { anchor, index: i };
+        continue;
+      }
+      return { anchor, index: i };
+    }
     if (!first) {
       first = anchor;
       firstIndex = i;
     }
   }
-  return first ? { anchor: first, index: firstIndex } : null;
+  return clippedMsg ?? (first ? { anchor: first, index: firstIndex } : null);
+}
+
+/**
+ * Shifts `list.scrollTop` by `delta` pixels immediately.
+ *
+ * WebKit2GTK's composited scrolling thread can flush an in-flight wheel update during the first
+ * `scrollTop` write and discard the programmatic target, leaving the list displaced by `delta` for
+ * one frame until a later frame snaps it back. Checking immediately after the write detects that
+ * flush; applying `delta` on top of the flushed position preserves both the reader's wheel scroll
+ * and content anchoring in the same frame before paint.
+ *
+ * Returns the compositor scroll delta flushed during the write (`0` in the normal case).
+ */
+export function shiftScrollTop(list: HTMLElement, delta: number): number {
+  if (Math.abs(delta) < 0.5) return 0;
+  const before = list.scrollTop;
+  const target = Math.max(0, Math.round(before + delta));
+  if (Math.abs(target - before) < 0.5) return 0;
+  list.scrollTop = target;
+  const after = list.scrollTop;
+  const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+  const clamped = Number.isFinite(maxScroll) && maxScroll > 0 ? Math.min(target, maxScroll) : target;
+  if (Math.abs(after - target) > 1 && Math.abs(after - clamped) > 1) {
+    list.scrollTop = Math.max(0, Math.round(after + delta));
+    return after - before;
+  }
+  return 0;
 }
 
 export function restoreAnchorPosition(list: HTMLElement, anchor: VisibleAnchor): RestoredAnchor | null {
   if (!list.contains(anchor.row)) return null;
   const top = anchor.row.getBoundingClientRect().top - list.getBoundingClientRect().top;
   const scrollTop = list.scrollTop;
-  if (top !== anchor.top) list.scrollTop = scrollTop + top - anchor.top;
-  return { row: anchor.row, contentTop: top + scrollTop };
+  const flushed = shiftScrollTop(list, top - anchor.top);
+  return { row: anchor.row, contentTop: top + scrollTop, top: anchor.top - flushed };
 }
 
 /**
@@ -183,19 +233,35 @@ export function settleAnchor(
   let stopped = false;
   let stable = 0;
   let frames = 0;
+  let expectedScrollTop = list.scrollTop;
+  let expectedContentTop = anchor.top + expectedScrollTop;
   const stop = () => {
     stopped = true;
   };
   const reconcile = () => {
     if (stopped || !list.contains(anchor.row)) return;
     if (++frames > SETTLE_MAX_FRAMES) return;
+    const scrollTop = list.scrollTop;
     const top = anchor.row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    const contentTop = top + scrollTop;
     if (Math.abs(top - anchor.top) <= 1) {
+      expectedScrollTop = scrollTop;
+      expectedContentTop = contentTop;
       stable += 1;
       if (stable >= SETTLE_STABLE_FRAMES) return;
+    } else if (Math.abs(scrollTop - expectedScrollTop) > 1) {
+      // The scroll position moved without our write (compositor smooth-wheel or momentum):
+      // never yank the person back; only compensate if layout itself shifted in the same frame.
+      const layoutShift = contentTop - expectedContentTop;
+      if (Math.abs(layoutShift) > 1) write(Math.max(0, Math.round(scrollTop + layoutShift)));
+      return;
     } else {
       stable = 0;
-      write(list.scrollTop + top - anchor.top);
+      const target = Math.max(0, Math.round(scrollTop + top - anchor.top));
+      write(target);
+      expectedScrollTop = list.scrollTop;
+      expectedContentTop = contentTop;
+      if (Math.abs(expectedScrollTop - target) > 1) return;
     }
     frame(reconcile);
   };
@@ -205,15 +271,21 @@ export function settleAnchor(
 
 /**
  * How far to scroll so what is on screen stays where it was: the growth of every row that ended above the list's
- * top edge before it changed. A row crossing that edge, or below it, is what the person looks at: it grows in place.
+ * top edge before it changed, plus any unmeasured placeholder row (`fromPlaceholder`) that started above the top
+ * edge or crossed into the top of the viewport during an upward scroll (`anchorEdge`). An already-drawn row crossing
+ * that edge, or any row below it, is what the person looks at: it grows in place.
  * `rows` in any order, each `top` as laid out after all of them changed.
  */
-export function anchorShift(rows: readonly RowResize[], scrollTop: number): number {
+export function anchorShift(rows: readonly RowResize[], scrollTop: number, anchorEdge = scrollTop): number {
   let shift = 0;
+  const cutoff = Math.max(scrollTop, anchorEdge);
   for (const row of [...rows].sort((a, b) => a.top - b.top)) {
-    // Where it ended before any of this: its top now, less what the rows above it grew by.
-    const endedAt = row.top - shift + row.before;
-    if (endedAt <= scrollTop) shift += row.after - row.before;
+    // Where it started and ended before any of this: its top now, less what the rows above it grew by.
+    const startedAt = row.top - shift;
+    const endedAt = startedAt + row.before;
+    if (endedAt <= scrollTop || (row.fromPlaceholder && (startedAt < scrollTop || endedAt <= cutoff))) {
+      shift += row.after - row.before;
+    }
   }
   return shift;
 }

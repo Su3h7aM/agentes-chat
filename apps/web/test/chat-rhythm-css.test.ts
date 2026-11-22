@@ -87,12 +87,14 @@ test("a card under a message stands the card gap off it, in its row or in one of
     );
   expect(gapped(".ac-msg__text,.ac-msg-media)~:is(.rq,", "margin-top", "var(--msg-card-gap)")).toBe(true);
   expect(gapped(".ac-msg--grouped:not(:has(.ac-msg__text)):has(.rq,", "--row-gap", "var(--msg-card-gap)")).toBe(true);
-  expect(
-    last(
-      '.channel__messages > .ac-msg:has(> .ac-msg__body > .rq[data-ask-kind="question"]) + .ac-msg--grouped',
-      "--row-gap",
-    ),
-  ).toBe("var(--msg-card-gap)");
+  expect(last(".channel__messages > .ac-msg[data-question] + .ac-msg--grouped", "--row-gap")).toBe(
+    "var(--msg-card-gap)",
+  );
+  // No `:has(...) + ...` on message rows: WebKitGTK invalidates siblings quadratically when prepending pages.
+  const adjacentHas = rules(css).filter((r) =>
+    r.selectors.some((s) => /\.channel__messages>\.ac-msg:has\([^)]*\)\+/.test(s)),
+  );
+  expect(adjacentHas).toHaveLength(0);
 });
 
 test("the list spends the two gaps: no flex gap, and a row gives its plate's room back", () => {
@@ -260,10 +262,7 @@ test("the agents' line is the conversation's width, the pair on its middle, and 
   // Between turns there too: the turn's gap on both sides, the body's part gap and the line's own room.
   expect(last(".ag-rcs .ag-rc--talk", "padding-block")).toBe("calc(var(--msg-turn-gap) - var(--msg-part-gap))");
   // A message that ends on it: what follows takes the part gap, which the line's room makes a turn's.
-  const after = rules(css).find((r) =>
-    r.selectors.some((s) => s.includes(".ag-rc--talk:last-child") && s.endsWith("+*")),
-  );
-  expect(after?.declarations).toContainEqual(["--row-gap", "var(--msg-part-gap)"]);
+  expect(last(".channel__messages > .ac-msg[data-ends-talk] + *", "--row-gap")).toBe("var(--msg-part-gap)");
   // Two in a row stack at the part gap: the room under the first, the stack's 6px and this margin add up to it.
   expect(last(".ag-rcs--stack", "gap")).toBe("6px");
   const next = rules(css).find((r) => r.selectors.some((s) => s.endsWith(".ag-rc--talk+.ag-rc--talk")));

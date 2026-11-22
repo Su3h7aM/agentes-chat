@@ -94,15 +94,13 @@
 .channel__messages > .ac-msg + .ac-msg--grouped:not(:has(.ac-msg__text)):has(.rq, .mi-card, .iw-card, .brw-ac) {
   --row-gap: var(--msg-card-gap);
 }
-.channel__messages > .ac-msg:has(> .ac-msg__body > .rq[data-ask-kind="question"]) + .ac-msg--grouped {
+/* Plain attribute selectors instead of `:has(...) + ...`: WebKitGTK invalidates all siblings quadratically on prepend
+   when `:has()` sits on the left of an adjacent-sibling combinator inside `.channel__messages`. */
+.channel__messages > .ac-msg[data-question] + .ac-msg--grouped {
   --row-gap: var(--msg-card-gap);
 }
 /* A message that ends on the agents' line (`.ag-rc--talk`) already holds part of the turn's gap under it. */
-.channel__messages
-  > .ac-msg:has(
-    > .ac-msg__body > .ag-rcs:nth-last-child(1 of :not(.ac-msg__actions, .ac-visually-hidden)) > .ag-rc--talk:last-child
-  )
-  + * {
+.channel__messages > .ac-msg[data-ends-talk] + * {
   --row-gap: var(--msg-part-gap);
 }
 .channel__messages > .ac-msg {

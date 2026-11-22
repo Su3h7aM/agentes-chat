@@ -113,6 +113,7 @@ export function playAgentReaction(key: string, kind: AgentReaction) {
 }
 
 const agents = new Set<LiveAgent>();
+const byBox = new Map<HTMLElement, LiveAgent>();
 const visible = new WeakSet<HTMLElement>();
 /** Boxes under the pointer: their agent moves, whatever it is doing. */
 const hovered = new WeakSet<HTMLElement>();
@@ -404,6 +405,7 @@ let followsSight = false;
 /** Starts drawing an agent; returns the cleanup. */
 export function addLiveAgent(agent: LiveAgent): () => void {
   agents.add(agent);
+  byBox.set(agent.box, agent);
   watchTheme();
   // Seen again: the loop starts (busy agents move); unseen, the next frame stills them and the loop stops.
   if (!followsSight) {
@@ -411,16 +413,23 @@ export function addLiveAgent(agent: LiveAgent): () => void {
     onSight(wakeLiveAgents);
   }
   if (typeof IntersectionObserver === "function") {
-    observer ??= new IntersectionObserver((entries) => {
-      let shown = false;
-      for (const e of entries) {
-        if (e.isIntersecting) {
-          visible.add(e.target as HTMLElement);
-          shown = true;
-        } else visible.delete(e.target as HTMLElement);
-      }
-      if (shown) wakeLiveAgents();
-    });
+    observer ??= new IntersectionObserver(
+      (entries) => {
+        const t = clock() / 1000;
+        let shown = false;
+        for (const e of entries) {
+          const box = e.target as HTMLElement;
+          if (e.isIntersecting) {
+            visible.add(box);
+            shown = true;
+            const live = byBox.get(box);
+            if (live) drawLive(live, t);
+          } else visible.delete(box);
+        }
+        if (shown) wakeLiveAgents();
+      },
+      { rootMargin: "400px 0px" },
+    );
     observer.observe(agent.box);
   } else visible.add(agent.box);
   const enter = () => {
@@ -433,18 +442,24 @@ export function addLiveAgent(agent: LiveAgent): () => void {
   if (typeof ResizeObserver === "function") {
     resizes ??= new ResizeObserver((entries) => {
       const t = clock() / 1000;
-      // Every size first, while the layout is fresh, then the drawing: a canvas that changes size makes it stale.
+      // Every size first, while the layout is fresh, then draw only visible avatars: prepending an older page
+      // inserts dozens of off-screen avatars whose 2D canvases need not rasterize until they approach the viewport.
       const boxes = entries.map((e) => e.target as HTMLElement);
       for (const box of boxes) sizes.set(box, box.clientWidth);
-      for (const box of boxes) for (const a of agents) if (a.box === box) drawLive(a, t);
+      for (const box of boxes) {
+        if (!visible.has(box)) continue;
+        const live = byBox.get(box);
+        if (live) drawLive(live, t);
+      }
     });
     resizes.observe(agent.box);
   }
-  drawLive(agent, typeof performance === "object" ? performance.now() / 1000 : 0);
+  if (visible.has(agent.box)) drawLive(agent, typeof performance === "object" ? performance.now() / 1000 : 0);
   wakeLiveAgents();
   return () => {
     agents.delete(agent);
     moving.delete(agent);
+    byBox.delete(agent.box);
     observer?.unobserve(agent.box);
     resizes?.unobserve(agent.box);
     agent.box.removeEventListener("pointerenter", enter);
