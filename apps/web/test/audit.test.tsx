@@ -183,6 +183,22 @@ describe("Configurações → Auditoria", () => {
     expect(within(kept).queryByRole("progressbar")).toBeNull();
   });
 
+  test("draws a viewport of rows while keeping offscreen sentences findable", async () => {
+    Object.defineProperty(document.body, "onbeforematch", { configurable: true, value: null });
+    const rows = Array.from({ length: 48 }, (_, index) =>
+      row({ id: `virtual-${index}`, target: { type: "tool", id: `needle-${index}` } }),
+    );
+    await go(seedState({ audit: rows }));
+    const scroller = document.querySelector<HTMLElement>(".shell__main") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 220 });
+    await act(async () => fireEvent.scroll(scroller));
+    await settle(4);
+
+    expect(section().querySelectorAll(".audit-row").length).toBe(9);
+    const layers = [...scroller.querySelectorAll<HTMLElement>("[data-findable-layer]")];
+    expect(layers.map((layer) => layer.textContent).join(" ")).toContain("needle 47");
+  });
+
   test("a row opens the thread's panel: the reason, what was sent (secrets hidden), the conversation", async () => {
     await go();
     const refused = [...section().querySelectorAll<HTMLElement>(".audit-row")][1] as HTMLElement;

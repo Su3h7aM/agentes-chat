@@ -393,6 +393,7 @@ export {
   EmptyState,
   type EmptyStateProps,
   List,
+  type ListProps,
   ListRow,
   type ListRowProps,
   Meter,

@@ -103,13 +103,17 @@ export function settleOnNextFrame(el: HTMLElement | null) {
  * A bordered list of rows (members, invitations, agents). The rows it opens with show at once (a page that fades its
  * rows in reads as slow); rows added once it is on screen rise in (`ac-list--settled`, a frame after mounting).
  */
-export function List({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+export interface ListProps extends HTMLAttributes<HTMLDivElement> {
+  ref?: Ref<HTMLDivElement>;
+}
+
+export function List({ className, ref, ...rest }: ListProps) {
   const [settled, setSettled] = useState(false);
   useEffect(() => {
     const frame = requestAnimationFrame(() => setSettled(true));
     return () => cancelAnimationFrame(frame);
   }, []);
-  return <div className={cx("ac-list", settled && "ac-list--settled", className)} {...rest} />;
+  return <div ref={ref} className={cx("ac-list", settled && "ac-list--settled", className)} {...rest} />;
 }
 
 export interface ListRowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "title"> {

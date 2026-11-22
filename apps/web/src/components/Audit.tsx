@@ -53,6 +53,7 @@ import { SidePanel } from "@/components/SidePanel";
 import { useDirectory } from "@/hooks/useDirectory";
 import { useEscClose } from "@/hooks/useEscClose";
 import { useRightHandLook } from "@/hooks/useRightHandLook";
+import { useVirtualList } from "@/hooks/useVirtualList";
 import { useToast } from "@/lib/toast";
 import "@/components/threads/threads.css";
 import "./audit.css";
@@ -75,6 +76,22 @@ export function AuditSection({ agent }: { agent?: string }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const audit = useAudit(org.id, auditQueryOf(show, agentId === ANY ? null : agentId));
   const rows = useMemo(() => audit.data?.pages.flatMap((p) => p.rows) ?? [], [audit.data]);
+  const { virtual, virtualRows, connectList } = useVirtualList({
+    items: rows,
+    key: (row) => row.id,
+    estimate: () => 68,
+    findable: (row) => {
+      const sentence = auditSentence(t, row, i18n.language);
+      const sub = auditSubLine(t, row, i18n.language);
+      return sub ? `${sentence.name ? `${sentence.name} ${sentence.text}` : sentence.text} ${sub}` : sentence.text;
+    },
+    keep: () => {
+      if (typeof document === "undefined") return [];
+      const focused = document.activeElement?.closest<HTMLElement>("[data-audit-index]");
+      return focused ? [Number(focused.dataset.auditIndex)] : [];
+    },
+    refreshKey: i18n.language,
+  });
   const open = rows.find((r) => r.id === openId) ?? null;
 
   const agentOptions = [
@@ -87,14 +104,6 @@ export function AuditSection({ agent }: { agent?: string }) {
     })),
   ];
 
-  // The rows by day, as the list shows them: each day a group under its heading.
-  const days: [string, AuditRow[]][] = [];
-  for (const row of rows) {
-    const label = dayLabel(t, i18n.language, row.at);
-    const last = days.at(-1);
-    if (last?.[0] === label) last[1].push(row);
-    else days.push([label, [row]]);
-  }
   return (
     <section className="audit" aria-label={t("settings.section.audit")}>
       <Toolbar
@@ -149,35 +158,60 @@ export function AuditSection({ agent }: { agent?: string }) {
           )
         ) : (
           <div className="ac-groups">
-            {days.map(([label, list]) => (
-              <div key={label}>
-                <GroupHeading level={3} title={label} />
-                <ul className="audit__list">
-                  {list.map((row) => (
-                    <li key={row.id}>
-                      <button
-                        type="button"
-                        className="audit-row"
-                        aria-pressed={row.id === openId}
-                        onClick={() => setOpenId(row.id)}
-                      >
-                        <Face row={row} />
-                        <span className="audit-row__text">
-                          <span className="audit-row__title">
-                            <Sentence row={row} />
-                          </span>
-                          <span className="audit-row__sub">{auditSubLine(t, row, i18n.language)}</span>
+            <ul ref={connectList} className="audit__list" style={{ position: "relative", height: virtual.size() }}>
+              {virtualRows.map((item) => {
+                const row = rows[item.index];
+                if (!row) return null;
+                const label = dayLabel(t, i18n.language, row.at);
+                const previous = rows[item.index - 1];
+                const startsDay = !previous || dayLabel(t, i18n.language, previous.at) !== label;
+                return (
+                  <li
+                    key={item.key}
+                    data-audit-index={item.index}
+                    aria-setsize={rows.length}
+                    aria-posinset={item.index + 1}
+                    style={{
+                      position: "absolute",
+                      top: item.start,
+                      width: "100%",
+                      paddingTop: startsDay && item.index > 0 ? 24 : 0,
+                    }}
+                    ref={(el) => virtual.measure(item.index, el)}
+                  >
+                    {startsDay && (
+                      <div aria-hidden="true">
+                        <GroupHeading level={3} title={label} />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="audit-row"
+                      aria-pressed={row.id === openId}
+                      onClick={() => setOpenId(row.id)}
+                    >
+                      {startsDay && <span className="ac-visually-hidden">{label}</span>}
+                      <Face row={row} />
+                      <span className="audit-row__text">
+                        <span className="audit-row__title">
+                          <Sentence row={row} />
                         </span>
-                        <OutcomeChip row={row} />
-                        <time className="audit-row__time" dateTime={row.at}>
-                          {formatTime(i18n.language, row.at)}
-                        </time>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+                        <span className="audit-row__sub">{auditSubLine(t, row, i18n.language)}</span>
+                      </span>
+                      <OutcomeChip row={row} />
+                      <time className="audit-row__time" dateTime={row.at}>
+                        {formatTime(i18n.language, row.at)}
+                      </time>
+                      <span
+                        aria-hidden="true"
+                        className="ac-visually-hidden"
+                        ref={(el) => virtual.findableText(item.index, el)}
+                      />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </Refreshing>

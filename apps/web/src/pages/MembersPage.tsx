@@ -47,7 +47,7 @@ import {
 } from "@agenteschat/ui";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
 import { AgentAvatar } from "@/components/AgentAvatar";
@@ -66,6 +66,7 @@ import { RoleChoices } from "@/components/roles/RolesPicker";
 import { RoleChip } from "@/components/roles/RolesSection";
 import { useDirectory } from "@/hooks/useDirectory";
 import { useTextLimit } from "@/hooks/useTextLimit";
+import { useVirtualList } from "@/hooks/useVirtualList";
 import type { MenuEntry } from "@/lib/context-menu";
 import { entityMenu } from "@/lib/entity-menu";
 import { planMeterText, usageShown } from "@/lib/plan-usage";
@@ -94,7 +95,7 @@ export function MembersPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [roles, setRoles] = useState<string[]>([]);
   const personEntries = usePersonMenu();
   const meterText = planMeterText(t, i18n.language);
-  const allPeople = peopleQuery.data ?? [];
+  const allPeople = useMemo(() => peopleQuery.data ?? [], [peopleQuery.data]);
   const filterCopy = useFilterCopy();
   const authConfig = useAuthConfig();
   // On a server that sends no email, an owner makes the link for a member who forgot their password (ADR 0158).
@@ -122,10 +123,30 @@ export function MembersPage({ embedded = false }: { embedded?: boolean } = {}) {
     }
   };
   // The filter's values: `owner`, or a role's id.
-  const people = allPeople.filter(
-    (m) =>
-      roles.length === 0 || roles.some((r) => (r === "owner" ? m.role === "owner" : (m.roleIds ?? []).includes(r))),
+  const people = useMemo(
+    () =>
+      allPeople.filter(
+        (m) =>
+          roles.length === 0 || roles.some((r) => (r === "owner" ? m.role === "owner" : (m.roleIds ?? []).includes(r))),
+      ),
+    [allPeople, roles],
   );
+  const { virtual, virtualRows, connectList } = useVirtualList({
+    items: people,
+    key: (person) => person.userId,
+    estimate: () => 84,
+    findable: (person) => {
+      const you = person.userId === me.user.id ? t("common.youSuffix") : "";
+      const handle = person.handle ? `@${person.handle}` : "";
+      return `${person.name}${you} ${handle} ${person.email}`;
+    },
+    keep: () => {
+      if (typeof document === "undefined") return [];
+      const focused = document.activeElement?.closest<HTMLElement>("[data-member-index]");
+      return focused ? [Number(focused.dataset.memberIndex)] : [];
+    },
+    refreshKey: `${i18n.language}:${me.user.id}`,
+  });
   // A personal workspace (ADR 0159): a few people need no filter by role, and its owner's own row leaves their roles
   // out (they say nothing to them); everyone else's keep theirs, and their menu gives one.
   const personal = isPersonal(org);
@@ -195,12 +216,22 @@ export function MembersPage({ embedded = false }: { embedded?: boolean } = {}) {
             />
           )}
           {peopleQuery.isLoading && <LoadingList count={3} trailing />}
-          <List>
-            {rows.map(({ m, isMe, gives, linksPassword, dm, out, admin }) => {
+          <List ref={connectList} style={{ position: "relative", height: virtual.size() }}>
+            {virtualRows.map((item) => {
+              const row = rows[item.index];
+              if (!row) return null;
+              const { m, isMe, gives, linksPassword, dm, out, admin } = row;
               const held = rolesOf(m, orgRoles);
               const ownRoles = personal && isMe && m.role === "owner";
               return (
-                <div key={m.userId} className="ac-list__row members-person" {...entityMenu(() => personEntries(m))}>
+                <div
+                  key={item.key}
+                  data-member-index={item.index}
+                  className="ac-list__row members-person"
+                  style={{ position: "absolute", top: item.start, width: "100%" }}
+                  ref={(el) => virtual.measure(item.index, el)}
+                  {...entityMenu(() => personEntries(m))}
+                >
                   <ProfileTrigger
                     actor={{ type: "person", id: m.userId }}
                     label={t("profile.of", { name: m.name })}
@@ -308,6 +339,11 @@ export function MembersPage({ embedded = false }: { embedded?: boolean } = {}) {
                         {out && <MenuEntries entries={[out]} />}
                       </Menu>
                     )}
+                    <span
+                      aria-hidden="true"
+                      className="ac-visually-hidden"
+                      ref={(el) => virtual.findableText(item.index, el)}
+                    />
                   </span>
                 </div>
               );

@@ -8,7 +8,10 @@ import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { ADMIN_ROLE_ID, createFakeApi, ORG_ID, seedRoles, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  delete (document.body as { onbeforematch?: unknown }).onbeforematch;
+});
 
 /**
  * Configurações › Membros with what breaks its two lists (break-ui): a 60-character name, a 70-character address with
@@ -103,6 +106,36 @@ const agentRow = (name: string) =>
   ) as HTMLElement;
 
 describe("Pessoas", () => {
+  test("draws a viewport of people while keeping offscreen names findable", async () => {
+    Object.defineProperty(document.body, "onbeforematch", { configurable: true, value: null });
+    const state = worst();
+    state.members.push(
+      ...Array.from(
+        { length: 48 },
+        (_, index): Member => ({
+          userId: `u-virtual-${index}`,
+          name: `Pessoa virtual ${index}`,
+          email: `virtual-${index}@example.com`,
+          image: null,
+          role: "member",
+          roleIds: [],
+          joinedAt: new Date(Date.now() - 86_400_000).toISOString(),
+          handle: `virtual${index}`,
+          timezone: "UTC",
+        }),
+      ),
+    );
+    await open(state);
+    const scroller = document.querySelector<HTMLElement>(".shell__main") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 220 });
+    await act(async () => fireEvent.scroll(scroller));
+    await settle(4);
+
+    expect(document.querySelectorAll(".members-person").length).toBe(8);
+    const layers = [...scroller.querySelectorAll<HTMLElement>("[data-findable-layer]")];
+    expect(layers.map((layer) => layer.textContent).join(" ")).toContain("virtual-47@example.com");
+  });
+
   test("a row: the name and addresses whole, the roles under them or no roles line, its buttons at its end", async () => {
     await open();
     const maria = personRow(LONG_NAME);
