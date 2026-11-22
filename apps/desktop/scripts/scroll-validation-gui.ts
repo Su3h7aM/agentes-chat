@@ -561,6 +561,18 @@ if (!window.__sv) {
       errors,
       layoutProbes,
     }),
+    resetStartupBaseline: () => {
+      // Drop startup/first-transition layout and scroll-write maxima so only
+      // scrolling after the initial full page is measured. Pages, row
+      // admission times, errors, and network counters are preserved.
+      layoutProbes.length = 0;
+      diagnostics.writes.length = 0;
+      diagnostics.resizes.length = 0;
+      diagnostics.scrolls.length = 0;
+      diagnostics.added.length = 0;
+      diagnostics.removed.length = 0;
+      return true;
+    },
   };
 }
 return true;
@@ -919,6 +931,26 @@ async function main() {
     );
     log(`injected ${cssFile}`);
   }
+  // Startup gate (profiling): wait for the initial full page before bursts so
+  // startup/first-transition maxima are never attributed to scrolling.
+  const expectedInitialRows = Math.min(seedMessages, 100);
+  await waitFor("initial full page", 120_000, async () => {
+    const state = (await execute(
+      "return { rows: window.__sv.scroller.querySelectorAll('.ac-msg[data-message-id]').length, loading: Boolean(document.querySelector('.channel__older')) };",
+    )) as { rows: number; loading: boolean };
+    return state.rows >= expectedInitialRows && !state.loading ? true : null;
+  });
+  await executeAsync(
+    `
+      const done = arguments[arguments.length - 1];
+      requestAnimationFrame(() => requestAnimationFrame(() => done(true)));
+    `,
+  );
+  await executeAsync(
+    `const done = arguments[arguments.length - 1]; window.__sv.settle(2500).then(() => done(true));`,
+  );
+  await execute("window.__sv.resetStartupBaseline(); return true;");
+  log(`initial full page ready (>=${expectedInitialRows} rows, settled)`);
   const burstResults: {
     ms: number;
     cadence: number[];
