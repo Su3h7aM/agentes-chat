@@ -1986,6 +1986,9 @@ function ChannelView({
     // Right after opening, the same grace as a fresh scroll.
     return Date.now() - Math.max(lastGesture.current, openedAt.current) > IDLE_CATCH_UP_MS;
   };
+  // The answer its landing was measured for: its row, its id, and whether its words are posted yet. A resize frame
+  // asks again only when one of those changed; until then the decision stands and the frame is a plain end-write.
+  const measured = useRef<{ row: HTMLElement; id: string; posted: boolean } | null>(null);
   /**
    * At the bottom: follow it, unless the newest row is an agent's answer taller than the list. That
    * one lands once with its first line at the top (and a brief highlight); then nothing pulls the list.
@@ -1999,25 +2002,32 @@ function ChannelView({
     const opening = !readyAt.current || Date.now() - readyAt.current < 1500;
     if (row && id && opening) landed.current.add(id);
     else if (row && id && !landed.current.has(id)) {
-      const box = el.getBoundingClientRect();
-      const rect = row.getBoundingClientRect();
-      const land = readingLanding({
-        scrollTop: el.scrollTop,
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-        rowTop: rect.top - box.top + el.scrollTop,
-        rowHeight: rect.height,
-      });
-      if (land.held) {
-        landed.current.add(id);
-        stick.current = false;
-        setHold(true);
-        clearUnseen();
-        if (smooth && !reducedMotionRef.current && typeof el.scrollTo === "function") {
-          autoScrollUntil.current = Date.now() + 600;
-          el.scrollTo({ top: land.top, behavior: "smooth" });
-        } else scrollNow(el, land.top);
-        return;
+      // At work the row shows no words (they come once posted): the answer is measured again then, and not before.
+      // Measuring it on every resize instead made a streaming answer walk the rows and two boxes per frame.
+      const posted = row.dataset.messageId !== undefined;
+      const seen = measured.current;
+      if (!seen || seen.row !== row || seen.id !== id || seen.posted !== posted) {
+        const box = el.getBoundingClientRect();
+        const rect = row.getBoundingClientRect();
+        const land = readingLanding({
+          scrollTop: el.scrollTop,
+          clientHeight: el.clientHeight,
+          scrollHeight: el.scrollHeight,
+          rowTop: rect.top - box.top + el.scrollTop,
+          rowHeight: rect.height,
+        });
+        measured.current = { row, id, posted };
+        if (land.held) {
+          landed.current.add(id);
+          stick.current = false;
+          setHold(true);
+          clearUnseen();
+          if (smooth && !reducedMotionRef.current && typeof el.scrollTo === "function") {
+            autoScrollUntil.current = Date.now() + 600;
+            el.scrollTo({ top: land.top, behavior: "smooth" });
+          } else scrollNow(el, land.top);
+          return;
+        }
       }
     }
     if (smooth && !reducedMotionRef.current && typeof el.scrollTo === "function") {
