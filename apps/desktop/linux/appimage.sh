@@ -22,9 +22,14 @@ root=$(cd "$here/../../.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/apps/desktop/src-tauri/target}
 out=$target/release/bundle/appimage
 
-# One image per Dockerfile: a change to it is a new image, an unchanged one is a cache hit.
-image=agentes-chat-appimage:$(sha256sum "$here/Dockerfile" | cut -c1-12)
-docker build -t "$image" "$here"
+# One image per Dockerfile and host architecture: a change to either is a new image, an unchanged one is a cache hit.
+case "$(uname -m)" in
+  x86_64) base_image=ghcr.io/pkgforge-dev/archlinux:x86_64-v2026.11.20@sha256:b5519591e5231c6d3cbf8f0eaae20dbd37ff299799c1f7952778df5c84dcad35 ;;
+  aarch64|arm64) base_image=ghcr.io/pkgforge-dev/archlinux:aarch64-v2026.11.20@sha256:81b369229f89c34af47118666d95d99d969f7741cd1d1ab0f8e647df8b893c91 ;;
+  *) echo "Unsupported AppImage build architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+image=agentes-chat-appimage:$(uname -m)-$(sha256sum "$here/Dockerfile" | cut -c1-12)
+docker build --build-arg "BASE_IMAGE=$base_image" -t "$image" "$here"
 
 mkdir -p "$out"
 out=$(cd "$out" && pwd)

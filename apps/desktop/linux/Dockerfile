@@ -1,6 +1,7 @@
 # The build image for the desktop app's Linux AppImage (ADR 0259): Arch with everything the build needs installed and
 # pinned, so build-appimage.sh runs in it without root. appimage.sh builds it and runs the build.
-FROM ghcr.io/pkgforge-dev/archlinux:v2026.11.18@sha256:13674fc5c7410908e1601b7c823a80e3d4bd088e630eed1d14fe18c8bceebe85
+ARG BASE_IMAGE=ghcr.io/pkgforge-dev/archlinux:x86_64-v2026.11.20@sha256:b5519591e5231c6d3cbf8f0eaae20dbd37ff299799c1f7952778df5c84dcad35
+FROM ${BASE_IMAGE}
 
 # Bun: the version of the root package.json `packageManager` (build-appimage.sh fails if they differ), with the sha256
 # of each release zip from the release's SHASUMS256.txt.
@@ -9,8 +10,8 @@ ARG BUN_SHA256_X64=bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb3
 ARG BUN_SHA256_AARCH64=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
 # pkgforge-dev/Anylinux-AppImages at one commit, never `main`. quick-sharun itself pins sharun, appimagetool and uruntime
 # by sha256, so this commit pins those too.
-ARG ANYLINUX_COMMIT=864f01a6ffac6a651ae90775fc76dc48db975b3c
-ARG QUICK_SHARUN_SHA256=6fc4f4561288297a7f8237f92b872656be1b7a4ba534f2b6cb9cfecabcddfd9d
+ARG ANYLINUX_COMMIT=88f5e3d58a526a35dea20a551571853dfc755703
+ARG QUICK_SHARUN_SHA256=0760970276aa003a658f1658c15f43131943e7e13ada66e04c35abccabc694ee
 ARG GET_DEBLOATED_SHA256=d215f7676785f1a1bb8784e69085d66c1df81488ef31f1ba7198325a5be05130
 # What get-debloated-pkgs replaces: `--add-common` is GTK3, ICU, libxml2, opus, Qt, GTK4, glycin and Mesa;
 # `webkit2gtk-4.1-mini` honours WEBKIT_EXEC_PATH, which an AppImage needs. Its packages carry the headers and .pc

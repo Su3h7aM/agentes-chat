@@ -20,7 +20,8 @@ newest libraries, with every one of them inside.
 
 ### 1. One build, in an image anyone can run
 
-`apps/desktop/linux/Dockerfile` is Arch (`ghcr.io/pkgforge-dev/archlinux`, by tag and digest) with the build's packages,
+`apps/desktop/linux/Dockerfile` is Arch (`ghcr.io/pkgforge-dev/archlinux`, by tag and digest, with a pinned
+x86_64 or aarch64 base chosen from the host architecture) with the build's packages,
 Bun and the packaging tools installed and pinned. `bun run desktop:appimage` (`appimage.sh`) builds it with `docker` (podman's
 emulation works: it adds `--userns=keep-id` when `docker` is podman and you aren't root; cached, so only the first run is slow) and runs `build-appimage.sh` in it as the user, without root. CI runs the
 same command on the Ubuntu runners, both architectures, and keeps the release names, the updater signature, the checksum,
