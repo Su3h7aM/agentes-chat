@@ -268,6 +268,10 @@ export const messages = pgTable(
     primaryKey({ columns: [t.id, t.createdAt] }),
     foreignKey({ columns: [t.orgId, t.channelId], foreignColumns: [channels.orgId, channels.id] }).onDelete("cascade"),
     index().on(t.channelId, t.createdAt),
+    // The channel timeline's initial page: newest top-level rows, before replies and deleted rows are skipped.
+    index("messages_channel_top_level_idx")
+      .on(t.channelId, t.createdAt)
+      .where(sql`${t.threadId} is null and ${t.deletedAt} is null`),
     index().on(t.threadId, t.createdAt),
     // The Threads page: replies grouped by thread within the channels a person sees.
     index().on(t.channelId, t.threadId, t.createdAt).where(sql`${t.threadId} is not null`),

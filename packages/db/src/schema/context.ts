@@ -161,6 +161,8 @@ export const contextItems = pgTable(
     index().on(t.orgId, t.scopeType, t.scopeId),
     index().on(t.agentId, t.status),
     index().on(t.orgId, t.subjectKey),
+    // Message memory marks: `memoriesFor` asks which items list any of a page's messages in `source_ids`.
+    index("context_items_source_ids_idx").using("gin", t.sourceIds),
   ],
 );
 

@@ -2528,6 +2528,13 @@
       "when": 1795743674221,
       "tag": "0365_local_workspace_decision_models",
       "breakpoints": true
+    },
+    {
+      "idx": 363,
+      "version": "7",
+      "when": 1795743674222,
+      "tag": "0366_local_scrollback_indexes",
+      "breakpoints": true
     }
   ]
 }

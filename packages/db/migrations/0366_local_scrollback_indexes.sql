@@ -1,0 +1,2 @@
+CREATE INDEX "messages_channel_top_level_idx" ON "messages" USING btree ("channel_id","created_at") WHERE "messages"."thread_id" is null and "messages"."deleted_at" is null;--> statement-breakpoint
+CREATE INDEX "context_items_source_ids_idx" ON "context_items" USING gin ("source_ids");
