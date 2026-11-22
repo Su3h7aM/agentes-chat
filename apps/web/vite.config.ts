@@ -3,7 +3,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { preloadLocale } from "./vite-locale-preload";
+import { preloadLocale } from "./vite-locale-preload.ts";
 
 // In development the web app runs on Vite (port 5173) and proxies /api,
 // including the WebSocket at /api/ws, to the server (port 3000). In
