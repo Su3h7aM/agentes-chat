@@ -395,4 +395,26 @@ describe("Segmented", () => {
     await act(async () => fireEvent.keyDown(group, { key: "ArrowLeft" }));
     expect(radio("Pessoal").getAttribute("aria-checked")).toBe("true");
   });
+
+  test("in a right-to-left layout the horizontal arrows swap: ArrowLeft goes to the next option", async () => {
+    const picked: string[] = [];
+    render(
+      <Segmented
+        label="Para quem"
+        value="a"
+        onValueChange={(value) => picked.push(value)}
+        options={[
+          { value: "a", label: "Pessoal" },
+          { value: "b", label: "Equipe" },
+          { value: "c", label: "Outro" },
+        ]}
+      />,
+    );
+    const group = body().getByRole("radiogroup", { name: "Para quem" });
+    group.style.direction = "rtl";
+    await act(async () => fireEvent.keyDown(group, { key: "ArrowLeft" }));
+    expect(picked).toEqual(["b"]);
+    await act(async () => fireEvent.keyDown(group, { key: "ArrowRight" }));
+    expect(picked).toEqual(["b", "c"]);
+  });
 });

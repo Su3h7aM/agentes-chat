@@ -12373,6 +12373,7 @@
     "output": "Salida",
     "waiting": "Esperando la salida…",
     "noOutput": "Sin salida.",
+    "finished": "Salida terminada.",
     "copy": "Copiar",
     "copied": "Código copiado."
   },

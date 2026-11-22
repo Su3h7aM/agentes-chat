@@ -12059,6 +12059,7 @@
     "output": "Uitvoer",
     "waiting": "Wachten op uitvoer…",
     "noOutput": "Geen uitvoer.",
+    "finished": "Uitvoer voltooid.",
     "copy": "Kopiëren",
     "copied": "Code gekopieerd."
   },

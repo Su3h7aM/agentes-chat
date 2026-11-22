@@ -11569,6 +11569,7 @@
     "output": "Keluaran",
     "waiting": "Menunggu output…",
     "noOutput": "Tidak ada output.",
+    "finished": "Keluaran selesai.",
     "copy": "Salin",
     "copied": "Kode disalin."
   },

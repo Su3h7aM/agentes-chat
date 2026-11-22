@@ -12476,6 +12476,7 @@
     "output": "Output",
     "waiting": "In attesa dell'output…",
     "noOutput": "Nessun output.",
+    "finished": "Output completato.",
     "copy": "Copia",
     "copied": "Codice copiato."
   },

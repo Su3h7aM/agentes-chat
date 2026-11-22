@@ -262,11 +262,11 @@ describe("code the agent runs", () => {
     expect(await announcedBy()).toBe("");
     // Its end is news, said once: a live region added to words already on screen would read nothing at all.
     rerender(<OutputView output={[{ stream: "stdout", text: "1\n2\n" }]} />);
-    expect(await announcedBy()).toBe("Saída");
-    // An output that ended empty says that instead.
+    expect(await announcedBy()).toBe("Saída concluída.");
+    // An output that ended empty is finished too.
     rerender(<OutputView output={[{ stream: "stdout", text: "1\n2\n" }]} live />);
     rerender(<OutputView output={[]} />);
-    expect(await announcedBy()).toBe("Sem saída.");
+    expect(await announcedBy()).toBe("Saída concluída.");
     // An output that was already over when it appeared (a call opened later) is something read, not news.
     announced()?.replaceChildren();
     cleanup();

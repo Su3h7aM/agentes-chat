@@ -12589,6 +12589,7 @@ export const ptBR = {
     output: "Saída",
     waiting: "Esperando a saída…",
     noOutput: "Sem saída.",
+    finished: "Saída concluída.",
     copy: "Copiar",
     copied: "Código copiado.",
   },

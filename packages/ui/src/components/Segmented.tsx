@@ -85,10 +85,11 @@ export function Segmented<V extends string>({
       aria-disabled={disabled || undefined}
       className={cx("ac-seg", size === "sm" && "ac-seg--sm", block && "ac-seg--block", className)}
       onKeyDown={(e) => {
-        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+        if (e.key === (rtl ? "ArrowLeft" : "ArrowRight") || e.key === "ArrowDown") {
           e.preventDefault();
           move(1);
-        } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        } else if (e.key === (rtl ? "ArrowRight" : "ArrowLeft") || e.key === "ArrowUp") {
           e.preventDefault();
           move(-1);
         }

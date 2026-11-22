@@ -12445,6 +12445,7 @@
     "output": "Sortie",
     "waiting": "En attente de la sortie…",
     "noOutput": "Aucune sortie.",
+    "finished": "Sortie terminée.",
     "copy": "Copier",
     "copied": "Code copié."
   },

@@ -11989,6 +11989,7 @@
     "output": "Ausgabe",
     "waiting": "Warte auf die Ausgabe…",
     "noOutput": "Keine Ausgabe.",
+    "finished": "Ausgabe abgeschlossen.",
     "copy": "Kopieren",
     "copied": "Code kopiert."
   },

@@ -156,8 +156,8 @@ export function OutputView({ output, live }: { output: LiveOutput[]; live?: bool
     // An output that is finished when it appears is something read, not news: nothing to announce.
     if (!wasLive.current) return;
     wasLive.current = false;
-    announce(output.length === 0 ? t("code.noOutput") : t("code.output"));
-  }, [live, output.length, t]);
+    announce(t("code.finished"));
+  }, [live, t]);
   return (
     <section aria-label={t("code.output")}>
       <pre ref={ref} className="live-code__out">

@@ -12573,6 +12573,7 @@ export const en = {
     output: "Output",
     waiting: "Waiting for output…",
     noOutput: "No output.",
+    finished: "Output finished.",
     copy: "Copy",
     copied: "Code copied.",
   },

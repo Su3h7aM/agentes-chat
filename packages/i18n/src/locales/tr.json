@@ -11923,6 +11923,7 @@
     "output": "Çıktı",
     "waiting": "Çıktı bekleniyor…",
     "noOutput": "Çıktı yok.",
+    "finished": "Çıktı tamamlandı.",
     "copy": "Kopyala",
     "copied": "Kod kopyalandı."
   },

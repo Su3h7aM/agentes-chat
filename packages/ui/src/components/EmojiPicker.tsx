@@ -136,8 +136,9 @@ export function EmojiPicker({
       return target ? (target.cells[Math.min(ci, target.cells.length - 1)]?.index ?? null) : null;
     };
     let next: number | null = null;
-    if (e.key === "ArrowRight") next = Math.min(current + 1, layout.count - 1);
-    else if (e.key === "ArrowLeft") next = Math.max(current - 1, 0);
+    const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+    if (e.key === (rtl ? "ArrowLeft" : "ArrowRight")) next = Math.min(current + 1, layout.count - 1);
+    else if (e.key === (rtl ? "ArrowRight" : "ArrowLeft")) next = Math.max(current - 1, 0);
     else if (e.key === "ArrowDown") next = at(r + 1, col);
     else if (e.key === "ArrowUp") {
       if (r === 0) {

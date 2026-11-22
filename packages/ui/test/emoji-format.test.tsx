@@ -185,6 +185,20 @@ describe("EmojiPicker", () => {
     ).toEqual(["🎉"]);
   });
 
+  test("keyboard in a right-to-left grid: ArrowLeft moves to the next emoji, ArrowRight back", async () => {
+    const { container } = render(<EmojiPicker labels={LABELS} onPick={() => {}} />);
+    const scroll = container.querySelector(".ac-emoji__scroll") as HTMLElement;
+    scroll.style.direction = "rtl";
+    const search = body().getByRole("searchbox", { name: "Buscar emoji" });
+    await act(async () => fireEvent.keyDown(search, { key: "ArrowDown" }));
+    const first = EMOJIS[0]?.emoji ?? "";
+    expect(document.activeElement?.textContent).toBe(first);
+    await act(async () => fireEvent.keyDown(document.activeElement as Element, { key: "ArrowLeft" }));
+    expect(document.activeElement?.textContent).toBe(EMOJIS[1]?.emoji);
+    await act(async () => fireEvent.keyDown(document.activeElement as Element, { key: "ArrowRight" }));
+    expect(document.activeElement?.textContent).toBe(first);
+  });
+
   test("in a popover: opens from its trigger, Esc closes and gives the focus back", async () => {
     const picked: string[] = [];
     render(

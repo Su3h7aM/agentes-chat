@@ -12869,6 +12869,7 @@
     "output": "Wynik",
     "waiting": "Czekam na wynik…",
     "noOutput": "Brak wyniku.",
+    "finished": "Wynik zakończony.",
     "copy": "Kopiuj",
     "copied": "Skopiowano kod."
   },
