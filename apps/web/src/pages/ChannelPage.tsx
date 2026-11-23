@@ -922,6 +922,7 @@ export function ChannelSkeleton({
           <div className="channel__spacer" aria-hidden="true" />
           <SkeletonConversationRows />
         </div>
+        <div className="channel__fade" aria-hidden="true" />
         <div className="channel__composer">
           <div className="ac-composer channel__composer-skeleton" aria-hidden="true">
             <span className="channel__composer-skeleton-line" />
@@ -3755,6 +3756,7 @@ function ChannelView({
                             )}
                           </section>
                         </RowsProvider>
+                        <div className="channel__fade" aria-hidden="true" />
                         <ToLatest
                           shown={!adjustThreadId && (far || pillOn || gap)}
                           count={unseenSummary.count}

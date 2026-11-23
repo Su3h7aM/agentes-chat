@@ -143,10 +143,13 @@ fn good_stack(drivers: &[String], appimage: bool) -> bool {
     !appimage && !drivers.is_empty() && drivers.iter().all(|d| matches!(d.as_str(), "i915" | "xe" | "amdgpu"))
 }
 
-/// How this opening draws, and why. `own_dmabuf`, `own_shm`: the person's own variables, which always win.
-/// `chosen`: the switch, when the person set it. `good`: DMA-BUF is known to work on this stack (`good_stack`).
-/// `last_unpainted`: what the last opening that never painted wrote in its marker (`marker`): only one whose page
-/// arrived on the graphics card counts, never one that was offline, found its server down or quit first.
+/// How this opening draws, and why. `own_dmabuf`, `own_shm`: the person's own variables, which always win when set —
+/// interpreted the way WebKitGTK reads them (any value other than `"0"` is on, `"0"` is off) so the app never
+/// overrides or reinterprets an explicit user setting; only when both are unset does Compatibility mode (defaulting
+/// to shared memory) decide. `chosen`: the switch, when the person set it. `good`: DMA-BUF is known to work on this
+/// stack (`good_stack`). `last_unpainted`: what the last opening that never painted wrote in its marker (`marker`):
+/// only one whose page arrived on the graphics card counts, never one that was offline, found its server down or
+/// quit first.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn decide(
     own_dmabuf: Option<&str>,
@@ -162,7 +165,7 @@ fn decide(
     if on(own_shm) {
         return (Draw::Shm, Why::Variable);
     }
-    if own_dmabuf.is_some() {
+    if own_dmabuf.is_some() || own_shm.is_some() {
         return (Draw::Gpu, Why::Variable);
     }
     let (draw, why) = match chosen {
@@ -600,10 +603,19 @@ mod tests {
         let on = Some(On);
         let off = Some(Off);
         let cpu = Some(CpuChoice);
-        // The person's own variables win over everything, "0" included.
+        // The person's own variables win over everything, "0" and non-numeric values included, following WebKitGTK's
+        // own `v != "0"` rule. Only when both variables are unset does the app's SHM default / switch apply.
         assert_eq!(decide(Some("1"), None, off, true, Some("gpu")), (Cpu, Why::Variable));
+        assert_eq!(decide(Some(""), None, off, true, None), (Cpu, Why::Variable));
+        assert_eq!(decide(Some("false"), None, on, true, None), (Cpu, Why::Variable));
         assert_eq!(decide(Some("0"), None, on, false, None), (Gpu, Why::Variable));
         assert_eq!(decide(None, Some("1"), off, true, None), (Shm, Why::Variable));
+        assert_eq!(decide(None, Some(""), off, true, None), (Shm, Why::Variable));
+        assert_eq!(decide(None, Some("0"), on, false, None), (Gpu, Why::Variable));
+        assert_eq!(decide(None, Some("0"), None, true, None), (Gpu, Why::Variable));
+        assert_eq!(decide(Some("0"), Some("1"), off, true, None), (Shm, Why::Variable));
+        assert_eq!(decide(Some("0"), Some("0"), on, true, None), (Gpu, Why::Variable));
+        assert_eq!(decide(Some("1"), Some("0"), off, true, None), (Cpu, Why::Variable));
         assert_eq!(decide(Some("1"), Some("1"), on, true, None), (Cpu, Why::Variable));
         // Compatibility mode on: shared memory, and CPU only after that never painted.
         assert_eq!(decide(None, None, on, true, None), (Shm, Why::Chosen));

@@ -218,7 +218,8 @@ describe("our scrollbars, never the browser's", () => {
       for (const rule of rules(css))
         for (const s of rule.selectors.filter((s) => scrollers.some((t) => on(t, s)) && !strips.some((t) => on(t, s))))
           for (const [p, v] of rule.declarations)
-            if (/^(-webkit-)?mask(-image)?$/.test(p)) masks.push([`${file}: ${s} {${p}}`, v]);
+            if (/^(-webkit-)?mask(-image)?$/.test(p) && !/^none(\s*!important)?$/.test(v))
+              masks.push([`${file}: ${s} {${p}}`, v]);
     expect(masks.map(([at]) => at)).toContain("apps/web/src/layout.css: .channel__messages {mask-image}");
     expect(masks.filter(([, v]) => !/,\s*var\(--scroll-strip(-x)?\)$/.test(v)).map(([at]) => at)).toEqual([]);
   });

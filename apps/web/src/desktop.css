@@ -42,25 +42,76 @@ html[data-sight="hidden"] *::after {
   /* biome-ignore lint/complexity/noImportantStyles: with nobody looking, no component's loop may keep going */
   animation-iteration-count: 1 !important;
 }
-/* Software painting pays for the list's mask on every frame, and a row's shadow repaints the whole list; the
-   conversation's own fade is not worth either while the person is reading through it. */
-html[data-desktop-renderer="cpu"] .channel__messages {
-  -webkit-mask-image: none !important;
-  mask-image: none !important;
+/* Scroller fade overlay (ChannelPage `.channel__fade`): hidden outside the Linux desktop webview, where browsers keep
+   the scroller's own mask-image fade (layout.css). */
+.channel__fade {
+  display: none;
 }
+/* Linux desktop WebKitGTK (shared-memory GPU, DMA-BUF, and software) pays for a full-scroller mask-image on every
+   scroll frame. Drop the mask, keep the stacking context with `isolation: isolate`, and draw the same bottom fade with
+   a small static overlay element sparing the 8px scrollbar. */
+html[data-desktop="linux"] .channel__messages,
+html[data-desktop-renderer="cpu"] .channel__messages {
+  /* biome-ignore lint/complexity/noImportantStyles: must beat layout.css and responsive.css scroller masks */
+  -webkit-mask-image: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must beat layout.css and responsive.css scroller masks */
+  mask-image: none !important;
+  isolation: isolate;
+}
+html[data-desktop="linux"] .channel__fade,
+html[data-desktop-renderer="cpu"] .channel__fade {
+  display: block;
+  position: relative;
+  height: 0;
+  pointer-events: none;
+}
+/* Over a conversation wallpaper, a solid `--bg` fade band would cut across the artwork. */
+html[data-desktop="linux"] .channel__col[data-wallpaper] > .channel__fade,
+html[data-desktop-renderer="cpu"] .channel__col[data-wallpaper] > .channel__fade {
+  display: none;
+}
+html[data-desktop="linux"] .channel__fade::before,
+html[data-desktop-renderer="cpu"] .channel__fade::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
+/* Spare the 8px scrollbar on fine pointers, matching `--scroll-strip` (components.css). */
+@media (hover: hover) and (pointer: fine) {
+  html[data-desktop="linux"] .channel__fade::before,
+  html[data-desktop-renderer="cpu"] .channel__fade::before {
+    right: 8px;
+  }
+}
+/* Narrow layout uses a 10px bottom fade, matching responsive.css `.channel__messages`. */
+@media (max-width: 760px) {
+  html[data-desktop="linux"] .channel__fade::before,
+  html[data-desktop-renderer="cpu"] .channel__fade::before {
+    height: 10px;
+  }
+}
+/* Painted in software, a row's shadow repaints the whole list, and a request card's wells and buttons repaint their
+   shadows on every reveal: drop them on CPU rendering. */
 html[data-desktop-renderer="cpu"] .channel__messages .ac-msg {
+  /* biome-ignore lint/complexity/noImportantStyles: painting on the CPU must beat row-level shadows during scroll */
   box-shadow: none !important;
 }
-/* A request card's wells and buttons repaint their shadows on every reveal: drop them with the row's. */
 html[data-desktop-renderer="cpu"] .rq *,
 html[data-desktop-renderer="cpu"] .rq *::before,
 html[data-desktop-renderer="cpu"] .rq *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: painting on the CPU must beat component shadows inside cards */
   box-shadow: none !important;
 }
-/* The work area sells itself to the compositor for future moves (layout.css `.shell__main`): painted in software,
-   that is a copy of the whole area on the CPU, on every frame of a scroll. `will-change: auto` drops the layer;
-   `contain: layout` keeps the containing block and stacking context the pages were laid out against (Drive's drop
-   zone, the wiki's floating bar). */
+/* The work area sells itself to the compositor for future moves (layout.css `.shell__main`): in Linux WebKitGTK,
+   promoting the whole work area forces full-area surface copies on every scroll frame. `will-change: auto` drops the
+   layer; `contain: layout` keeps the containing block and stacking context the pages were laid out against (Drive's
+   drop zone, the wiki's floating bar). */
+html[data-desktop="linux"] .shell__main,
 html[data-desktop-renderer="cpu"] .shell__main {
   will-change: auto;
   contain: layout;

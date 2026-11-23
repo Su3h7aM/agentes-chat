@@ -90,26 +90,63 @@ describe("switching the theme", () => {
 });
 
 describe("a window painted in software", () => {
-  test("holds the live drawings: no frame is asked for", () => {
+  test("holds the live drawings on CPU renderer: no frame is asked for", () => {
     const root = document.documentElement;
     const real = globalThis.requestAnimationFrame;
-    let frames = 0;
-    root.dataset.desktopRenderer = "cpu";
-    // The loop starts by asking for a frame; the stub counts the asks and schedules nothing.
-    globalThis.requestAnimationFrame = (() => {
-      frames++;
-      return 0;
-    }) as typeof requestAnimationFrame;
-    try {
-      const canvas = document.createElement("canvas");
-      const box = document.createElement("div");
-      document.body.append(box, canvas);
-      const stop = addLiveAgent({ canvas, box, look: () => ({ state: "idle", seed: 1 }) });
-      expect(frames).toBe(0);
-      stop();
-    } finally {
-      globalThis.requestAnimationFrame = real;
-      delete root.dataset.desktopRenderer;
+    for (const attrs of [{ desktopRenderer: "cpu" }, { desktop: "linux", desktopRenderer: "cpu" }]) {
+      let frames = 0;
+      Object.assign(root.dataset, attrs);
+      // The loop starts by asking for a frame; the stub counts the asks and schedules nothing.
+      globalThis.requestAnimationFrame = (() => {
+        frames++;
+        return 0;
+      }) as typeof requestAnimationFrame;
+      try {
+        const canvas = document.createElement("canvas");
+        const box = document.createElement("div");
+        document.body.append(box, canvas);
+        const stop = addLiveAgent({ canvas, box, look: () => ({ state: "idle", seed: 1 }) });
+        expect(frames).toBe(0);
+        stop();
+        box.remove();
+        canvas.remove();
+      } finally {
+        globalThis.requestAnimationFrame = real;
+        delete root.dataset.desktop;
+        delete root.dataset.desktopRenderer;
+      }
+    }
+  });
+
+  test("keeps live drawings running in browsers and on Linux, macOS and Windows desktop GPU", () => {
+    const root = document.documentElement;
+    const real = globalThis.requestAnimationFrame;
+    for (const attrs of [
+      {},
+      { desktop: "linux", desktopRenderer: "gpu" },
+      { desktop: "mac", desktopRenderer: "gpu" },
+      { desktop: "windows", desktopRenderer: "gpu" },
+    ]) {
+      let frames = 0;
+      Object.assign(root.dataset, attrs);
+      globalThis.requestAnimationFrame = (() => {
+        frames++;
+        return 0;
+      }) as typeof requestAnimationFrame;
+      try {
+        const canvas = document.createElement("canvas");
+        const box = document.createElement("div");
+        document.body.append(box, canvas);
+        const stop = addLiveAgent({ canvas, box, look: () => ({ state: "idle", seed: 1 }) });
+        expect(frames).toBeGreaterThan(0);
+        stop();
+        box.remove();
+        canvas.remove();
+      } finally {
+        globalThis.requestAnimationFrame = real;
+        delete root.dataset.desktop;
+        delete root.dataset.desktopRenderer;
+      }
     }
   });
 });
