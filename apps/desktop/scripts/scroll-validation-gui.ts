@@ -12,11 +12,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { createDiskBlobStore } from "@agenteschat/adapters";
 import { createDatabase, pgliteUrl, schema } from "@agenteschat/db";
-import {
-  type Family,
-  MESSAGES,
-  seedHistory,
-} from "../../server/test/scroll-validation-seed";
+import { type Family, MESSAGES, seedHistory } from "../../server/test/scroll-validation-seed";
 
 const REPO = resolve(import.meta.dir, "../../..");
 /** A rapid but realistic upward fling: ~12,000 px/s at 60 fps, not a teleport. */
@@ -586,10 +582,7 @@ async function webdriver<T>(method: string, path: string, body?: unknown): Promi
     signal: AbortSignal.timeout(120_000),
   });
   const json = (await response.json()) as { value: T | { error?: string; message?: string } };
-  if (
-    !response.ok ||
-    (json.value && typeof json.value === "object" && "error" in json.value && json.value.error)
-  ) {
+  if (!response.ok || (json.value && typeof json.value === "object" && "error" in json.value && json.value.error)) {
     const failure = json.value as { error?: string; message?: string };
     throw new Error(`WebDriver ${method} ${path}: ${failure.error ?? response.status} ${failure.message ?? ""}`);
   }
@@ -624,9 +617,10 @@ async function setupLocalApp(serverUrl: string) {
   await waitFor("the AppImage setup window", 60_000, async () => {
     for (const handle of await handles()) {
       await useHandle(handle);
-      const state = (await execute(
-        "return { url: location.href, text: document.body?.innerText || '' };",
-      )) as { url: string; text: string };
+      const state = (await execute("return { url: location.href, text: document.body?.innerText || '' };")) as {
+        url: string;
+        text: string;
+      };
       if (state.url.startsWith(serverUrl)) return true;
       if (clicked) continue;
       // Each stage is polled on its own: after "On this computer" the first
@@ -750,9 +744,7 @@ async function main() {
       locale: "en",
     });
     await database.db.insert(schema.organizations).values({ id: orgId, name: "Scroll Lab" });
-    await database.db
-      .insert(schema.organizationMembers)
-      .values({ orgId, userId, role: "owner", handle: "marina" });
+    await database.db.insert(schema.organizationMembers).values({ orgId, userId, role: "owner", handle: "marina" });
     await database.db
       .insert(schema.channels)
       .values({ id: channelId, orgId, name: "general", createdByUserId: userId });
@@ -841,9 +833,7 @@ async function main() {
     capabilities: {
       alwaysMatch: {
         browserName: "wry",
-        "tauri:options": cpu
-          ? { application: dirs.run, args: ["--compatibility-mode"] }
-          : { application: dirs.run },
+        "tauri:options": cpu ? { application: dirs.run, args: ["--compatibility-mode"] } : { application: dirs.run },
       },
     },
   });
@@ -893,7 +883,9 @@ async function main() {
     } catch (readError) {
       page = { error: String(readError) };
     }
-    throw new Error(`${error instanceof Error ? error.message : String(error)} (last URL: ${lastUrl}; page: ${JSON.stringify(page)})`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} (last URL: ${lastUrl}; page: ${JSON.stringify(page)})`,
+    );
   }
   const visible = (await executeAsync(
     String.raw`
@@ -946,9 +938,7 @@ async function main() {
       requestAnimationFrame(() => requestAnimationFrame(() => done(true)));
     `,
   );
-  await executeAsync(
-    `const done = arguments[arguments.length - 1]; window.__sv.settle(2500).then(() => done(true));`,
-  );
+  await executeAsync(`const done = arguments[arguments.length - 1]; window.__sv.settle(2500).then(() => done(true));`);
   await execute("window.__sv.resetStartupBaseline(); return true;");
   log(`initial full page ready (>=${expectedInitialRows} rows, settled)`);
   const burstResults: {
@@ -1093,8 +1083,7 @@ async function main() {
   const deltas = burstResults.flatMap((burst) => burst.cadence).sort((a, b) => a - b);
   const pct = (p: number) => deltas[Math.min(deltas.length - 1, Math.floor((deltas.length - 1) * p))] ?? 0;
   const layoutMs = snapshot.layoutProbes.map((probe) => probe.ms).sort((a, b) => a - b);
-  const layoutPct = (p: number) =>
-    layoutMs[Math.min(layoutMs.length - 1, Math.floor((layoutMs.length - 1) * p))] ?? 0;
+  const layoutPct = (p: number) => layoutMs[Math.min(layoutMs.length - 1, Math.floor((layoutMs.length - 1) * p))] ?? 0;
   const worstSettle = settleResults.reduce(
     (worst, settle) => (settle.maxDisplacement > worst.maxDisplacement ? settle : worst),
     settleResults[0] ?? {

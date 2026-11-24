@@ -596,6 +596,8 @@ describe("Configurações do workspace", () => {
     expect(state.calls.findLast((c) => c.method === "orgs.updateSettings")?.args[1]).toEqual({
       defaultAgentBudgetUsd: 80,
     });
+    await act(async () => fireEvent.mouseDown(screen().getByRole("tab", { name: "Contas de IA" }), { button: 0 }));
+    await settle(4);
     // An admin who isn't the server's owner: no separate Jev key card. The one decision card says where the key lives.
     expect(screen().queryByRole("region", { name: "Jev" })).toBeNull();
     const decisions = screen().getByRole("region", { name: "Quem escolhe os agentes" });

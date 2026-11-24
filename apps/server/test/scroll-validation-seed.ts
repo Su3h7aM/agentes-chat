@@ -58,7 +58,7 @@ function bodyFor(kind: Kind, i: number): string {
       "",
       "```ts",
       `if (attempt < ${i % 7}) {`,
-      '  await backoff(attempt, { jitter: true });',
+      "  await backoff(attempt, { jitter: true });",
       "}",
       "```",
       "",
