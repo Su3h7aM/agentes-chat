@@ -1,0 +1,7 @@
+{
+  "identifier": "microphone",
+  "description": "The bundled microphone prompt can answer the pending request.",
+  "webviews": ["microphone"],
+  "platforms": ["linux"],
+  "permissions": ["allow-microphone-decide"]
+}

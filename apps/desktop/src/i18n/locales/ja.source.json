@@ -1271,6 +1271,12 @@
   "server.keepOff": {
     "value": "Not yet"
   },
+  "microphone.title": {
+    "value": "Allow access to the microphone?"
+  },
+  "microphone.body": {
+    "value": "This lets you record voice messages on {{server}}."
+  },
   "pair.title": {
     "value": "Let agents of {{org}} work on this {{device}}?"
   },

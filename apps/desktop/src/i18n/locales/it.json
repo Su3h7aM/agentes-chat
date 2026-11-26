@@ -475,6 +475,10 @@
     "keepOn": "Fatto",
     "keepOff": "Non ancora"
   },
+  "microphone": {
+    "title": "Consentire l’accesso al microfono?",
+    "body": "Così puoi registrare messaggi vocali su {{server}}."
+  },
   "pair": {
     "title": "Permettere agli agenti di {{org}} di lavorare su questo {{device}}?",
     "body": "{{host}} l'ha chiesto. Gli agenti avranno comandi, browser e strumenti di codice di qui. Le cartelle dopo, in Preferenze.",

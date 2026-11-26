@@ -73,6 +73,7 @@ const COMMANDS: &[&str] = &[
     "welcome_add",
     "pair_link_info",
     "pair_ask",
+    "microphone_decide",
     "screen_access",
     "screen_request",
     "disk_access",

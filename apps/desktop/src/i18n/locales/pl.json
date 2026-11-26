@@ -479,6 +479,10 @@
     "keepOn": "Gotowe",
     "keepOff": "Jeszcze nie"
   },
+  "microphone": {
+    "title": "Zezwolić na dostęp do mikrofonu?",
+    "body": "Dzięki temu możesz nagrywać wiadomości głosowe na {{server}}."
+  },
   "pair": {
     "title": "Pozwolić agentom z {{org}} pracować na tym urządzeniu ({{device}})?",
     "body": "{{host}} o to poprosił. Agenci dostaną polecenia, przeglądarkę i narzędzia do kodu. Foldery dodasz w Preferencjach.",

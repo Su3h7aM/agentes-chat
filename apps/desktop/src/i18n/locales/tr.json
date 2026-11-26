@@ -471,6 +471,10 @@
     "keepOn": "Tamam",
     "keepOff": "Henüz değil"
   },
+  "microphone": {
+    "title": "Mikrofon erişimine izin verilsin mi?",
+    "body": "Böylece {{server}} üzerinde sesli mesaj kaydedebilirsin."
+  },
   "pair": {
     "title": "{{org}} ajanları bu {{device}} üzerinde çalışabilsin mi?",
     "body": "{{host}} istedi. Ajanlar komutları, tarayıcıyı ve kodlama araçlarını kullanır. Klasörleri sonra Tercihler'den eklersin.",

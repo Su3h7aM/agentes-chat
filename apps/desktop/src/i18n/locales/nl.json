@@ -471,6 +471,10 @@
     "keepOn": "Klaar",
     "keepOff": "Nog niet"
   },
+  "microphone": {
+    "title": "Toegang tot de microfoon toestaan?",
+    "body": "Zo kun je spraakberichten opnemen op {{server}}."
+  },
   "pair": {
     "title": "Agents van {{org}} laten werken op deze {{device}}?",
     "body": "{{host}} vroeg erom. Agents krijgen opdrachten, de browser en de codetools hier. Mappen voeg je later toe in Voorkeuren.",

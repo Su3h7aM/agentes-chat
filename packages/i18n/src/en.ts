@@ -12150,6 +12150,8 @@ export const en = {
     refused: "The audio couldn't be sent in this conversation.",
     blockedMac: "The microphone is blocked. On a Mac: System Settings › Privacy › Microphone.",
     openMacSettings: "Open Mac Settings",
+    blockedLinux: "Microphone access is blocked in the app. Check your sound settings and try recording again.",
+    blockedWindows: "Microphone access is blocked. In Windows Settings, allow desktop apps to access the microphone.",
     blockedWeb: "The microphone is blocked. Allow it from the lock next to the site's address.",
     noMic: "No microphone found.",
     failed: "Couldn't open the microphone. Try again.",

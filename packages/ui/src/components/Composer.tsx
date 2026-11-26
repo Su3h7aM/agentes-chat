@@ -37,7 +37,7 @@ import { useAutoGrow, useLocked, useStillDefaultText } from "./Field";
 import { modKey } from "./Kbd";
 import { PixelStop } from "./PixelMarks";
 import { Spinner } from "./Skeleton";
-import { useVoiceRecorder, type VoiceNotice, type VoiceTake, voiceRecordingSupported } from "./voice-recorder";
+import { useVoiceRecorder, type VoiceRecorderOptions, voiceRecordingSupported } from "./voice-recorder";
 
 /** Names of the formatting buttons (also their tooltips, with the shortcut). */
 export type ComposerFormatLabels = Record<FormatKind, string> & {
@@ -118,18 +118,9 @@ export interface ComposerWorking {
  * the text, which stays usable: sending it sends what was typed and attached too, in one message (`onTake` reads them
  * from the app's own draft and files).
  */
-export interface ComposerVoice {
+export interface ComposerVoice extends Omit<VoiceRecorderOptions, "onKey"> {
   /** Where this recording would go: when it changes, one under way is dropped. */
   scope: string;
-  /**
-   * Asked before the microphone opens: false stops there (the app says why). `"tap"`: the app asked the person first
-   * (a dialog), so a press held meanwhile records hands free instead of ending with its release.
-   */
-  allowed?: () => Promise<boolean | "tap">;
-  onTake: (take: VoiceTake) => void;
-  onNotice: (notice: VoiceNotice) => void;
-  /** Each second it records, never while starting or paused: the others see "gravando áudio…". */
-  onRecording?: () => void;
   labels: {
     record: string;
     recording: string;

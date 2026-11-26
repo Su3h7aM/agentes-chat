@@ -471,6 +471,10 @@
     "keepOn": "Erledigt",
     "keepOff": "Noch nicht"
   },
+  "microphone": {
+    "title": "Zugriff auf das Mikrofon erlauben?",
+    "body": "So kannst du Sprachnachrichten auf {{server}} aufnehmen."
+  },
   "pair": {
     "title": "Agenten von {{org}} auf diesem {{device}} arbeiten lassen?",
     "body": "{{host}} hat angefragt. Agenten bekommen Befehle, Browser und Programmiertools. Ordner folgen später in den Einstellungen.",

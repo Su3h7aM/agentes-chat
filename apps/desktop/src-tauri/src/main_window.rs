@@ -45,7 +45,7 @@ pub fn site(app: &AppHandle) -> Option<Url> {
     servers::current(app)
 }
 
-fn same_site(url: &Url, site: &Url) -> bool {
+pub(super) fn same_site(url: &Url, site: &Url) -> bool {
     url.scheme() == site.scheme()
         && url.host_str() == site.host_str()
         && url.port_or_known_default() == site.port_or_known_default()
@@ -337,14 +337,15 @@ pub fn open(app: &AppHandle, url: Option<Url>) -> Result<(), String> {
         .hidden_title(true);
     let built = builder.build().map_err(|e| e.to_string())?;
     crate::bench::window_built();
-    // Linux's side of lib.rs `on_web_content_process_terminate` (macOS only in Tauri): a web process that died
-    // leaves the window blank, so the page loads again.
     #[cfg(target_os = "linux")]
     {
         let app = app.clone();
         let _ = built.with_webview(move |view| {
             use webkit2gtk::WebViewExt;
-            view.inner().connect_web_process_terminated(move |view, reason| {
+            let view = view.inner();
+            crate::microphone::install(&app, &view);
+            // A terminated web process leaves the window blank until the page reloads.
+            view.connect_web_process_terminated(move |view, reason| {
                 crate::health::note(&app, &format!("the web process of {LABEL} ended ({reason:?}): loading it again"));
                 crate::cover::show(&app, std::time::Duration::ZERO);
                 view.reload();

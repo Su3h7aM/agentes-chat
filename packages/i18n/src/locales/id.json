@@ -11188,6 +11188,8 @@
     "refused": "Audio tidak bisa dikirim di percakapan ini.",
     "blockedMac": "Mikrofon diblokir. Di Mac: Pengaturan Sistem › Privasi & Keamanan › Mikrofon.",
     "openMacSettings": "Buka Pengaturan Mac",
+    "blockedLinux": "Akses mikrofon diblokir di aplikasi. Periksa pengaturan suara lalu coba rekam lagi.",
+    "blockedWindows": "Akses mikrofon diblokir. Di Pengaturan Windows, izinkan aplikasi desktop mengakses mikrofon.",
     "blockedWeb": "Mikrofon diblokir. Izinkan lewat ikon gembok di samping alamat situs.",
     "noMic": "Mikrofon tidak ditemukan.",
     "failed": "Mikrofon tidak bisa dibuka. Coba lagi.",

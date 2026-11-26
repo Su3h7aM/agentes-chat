@@ -34,8 +34,6 @@ export const voiceRecordingSupported = () =>
   typeof navigator.mediaDevices?.getUserMedia === "function" &&
   typeof window.AudioContext === "function";
 
-const bestType = () => TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
-
 /** About `PEAKS` bars from every level heard: each the loudest of its stretch, scaled to the loudest of all. */
 export function peaksOf(levels: readonly number[], n = PEAKS): number[] {
   if (levels.length === 0) return [];
@@ -82,18 +80,22 @@ class Recording {
     this.t0 = performance.now();
   }
 
-  static async open() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    const ac = new AudioContext();
-    await ac.resume().catch(() => undefined);
-    const analyser = ac.createAnalyser();
-    analyser.fftSize = 1024;
-    ac.createMediaStreamSource(stream).connect(analyser);
-    const mimeType = bestType();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    return new Recording(stream, ac, analyser, recorder);
+  static async open(stream: MediaStream, preferredTypes: readonly string[] = []) {
+    let ac: AudioContext | undefined;
+    try {
+      ac = new AudioContext();
+      await ac.resume().catch(() => undefined);
+      const analyser = ac.createAnalyser();
+      analyser.fftSize = 1024;
+      ac.createMediaStreamSource(stream).connect(analyser);
+      const mimeType = [...preferredTypes, ...TYPES].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      return new Recording(stream, ac, analyser, recorder);
+    } catch (error) {
+      stopStream(stream);
+      void ac?.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   elapsed() {
@@ -227,9 +229,19 @@ class Recording {
   }
 
   private release() {
-    for (const track of this.stream.getTracks()) track.stop();
+    stopStream(this.stream);
     void this.ac.close().catch(() => undefined);
   }
+}
+
+function openMicrophone() {
+  return navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+}
+
+function stopStream(stream: MediaStream) {
+  for (const track of stream.getTracks()) track.stop();
 }
 
 export interface VoiceRecorderOptions {
@@ -238,6 +250,10 @@ export interface VoiceRecorderOptions {
    * (a dialog), so a press held meanwhile records hands free instead of ending with its release.
    */
   allowed?: () => Promise<boolean | "tap">;
+  /** Start the permission request from the gesture, while the allowance check runs. */
+  requestFromGesture?: boolean;
+  /** Recording MIME types to try before the defaults, in order. */
+  preferredTypes?: readonly string[];
   onTake: (take: VoiceTake) => void;
   onNotice: (notice: VoiceNotice) => void;
   /** Each second it records, never while starting or paused: the others see "gravando áudio…". */
@@ -254,6 +270,7 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
   const [seconds, setSeconds] = useState(0);
   const current = useRef<Recording | null>(null);
   const opening = useRef(false);
+  const openingMic = useRef<AbortController | null>(null);
   const released = useRef(false);
   /** Dropped while the microphone was still opening (another conversation, the composer gone): nothing to keep. */
   const dropped = useRef(false);
@@ -285,7 +302,10 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
     (say: boolean) => {
       const rec = current.current;
       if (!rec) {
-        if (opening.current) dropped.current = true;
+        if (opening.current) {
+          dropped.current = true;
+          openingMic.current?.abort();
+        }
         return;
       }
       rec.cancel();
@@ -305,19 +325,42 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
       setPhase("starting");
       setHold(holding);
       try {
-        const ok = latest.current?.allowed ? await latest.current.allowed() : true;
-        if (!ok || dropped.current) {
+        const options = latest.current;
+        const pending = options?.requestFromGesture ? new AbortController() : null;
+        openingMic.current = pending;
+        const microphone = pending ? openMicrophone() : null;
+        void microphone?.then(
+          (stream) => {
+            const stop = () => stopStream(stream);
+            if (pending?.signal.aborted) stop();
+            else pending?.signal.addEventListener("abort", stop, { once: true });
+          },
+          () => {},
+        );
+        let allowed: boolean | "tap" = false;
+        try {
+          allowed = !options?.allowed || (await options.allowed());
+        } finally {
+          if (!allowed) pending?.abort();
+        }
+        if (!allowed || dropped.current || pending?.signal.aborted) {
           idle();
           return;
         }
-        if (ok === "tap" && holding) {
+        if (allowed === "tap" && holding) {
           holding = false;
           released.current = false;
           setHold(false);
         }
         stopVoicePlayback();
-        const rec = await Recording.open();
+        const stream = await (microphone ?? openMicrophone());
         // Let go, or dropped, while the browser asked for the microphone: nothing to record, and no mic left on.
+        if (dropped.current || (holding && released.current)) {
+          if (!pending) stopStream(stream);
+          idle();
+          return;
+        }
+        const rec = await Recording.open(stream, options?.preferredTypes);
         if (dropped.current || (holding && released.current)) {
           rec.cancel();
           idle();
@@ -336,6 +379,7 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
               : "failed",
         );
       } finally {
+        openingMic.current = null;
         opening.current = false;
       }
     },
@@ -430,6 +474,7 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
   useEffect(
     () => () => {
       dropped.current = true;
+      openingMic.current?.abort();
       current.current?.cancel();
       current.current = null;
     },
@@ -476,7 +521,10 @@ export function useVoiceRecorder(options: VoiceRecorderOptions | undefined, wave
           lastUp.current = performance.now();
           if (!holding) void start(false);
           else if (current.current) void send();
-          else released.current = true;
+          else {
+            released.current = true;
+            openingMic.current?.abort();
+          }
         };
         const cancel = () => {
           window.removeEventListener("pointerup", up);

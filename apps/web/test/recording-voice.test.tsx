@@ -67,6 +67,94 @@ const withMarina = () => {
   return state;
 };
 
+describe("microphone permission", () => {
+  test.each([
+    ["linux", "O microfone está bloqueado no aplicativo."],
+    ["windows", "Em Configurações do Windows"],
+    ["browser", "Libere pelo cadeado"],
+  ])("explains a denied microphone on %s", async (platform, guidance) => {
+    const desktop = window as Window & { __agentesDesktop?: { platform: string } };
+    const restoreMicrophone = fakeMicrophone();
+    restore = () => {
+      restoreMicrophone();
+      delete desktop.__agentesDesktop;
+    };
+    if (platform !== "browser") desktop.__agentesDesktop = { platform };
+    navigator.mediaDevices.getUserMedia = async () => {
+      throw new DOMException("Permission denied", "NotAllowedError");
+    };
+    await open(seedState({ media: { voiceAvailable: true } }));
+    await record();
+    expect(screen().getByText(new RegExp(guidance))).toBeTruthy();
+    if (platform !== "browser") expect(screen().queryByText(/cadeado/)).toBeNull();
+    expect(screen().getByRole("button", { name: "Gravar áudio" })).toBeTruthy();
+  });
+
+  test("tries Opus before AAC in the Linux desktop recorder", async () => {
+    const desktop = window as Window & { __agentesDesktop?: { platform: string } };
+    const restoreMicrophone = fakeMicrophone();
+    restore = () => {
+      restoreMicrophone();
+      delete desktop.__agentesDesktop;
+    };
+    desktop.__agentesDesktop = { platform: "linux" };
+    const tried: string[] = [];
+    window.MediaRecorder.isTypeSupported = (type) => {
+      tried.push(type);
+      return true;
+    };
+    await open(seedState({ media: { voiceAvailable: true } }));
+    await record();
+    expect(tried).toEqual(["audio/webm;codecs=opus"]);
+    expect(screen().getByRole("button", { name: "Pausar" })).toBeTruthy();
+  });
+
+  test.each(["refused", "abandoned"])("releases the early Linux microphone when recording is %s", async (outcome) => {
+    const desktop = window as Window & { __agentesDesktop?: { platform: string } };
+    const restoreMicrophone = fakeMicrophone();
+    restore = () => {
+      restoreMicrophone();
+      delete desktop.__agentesDesktop;
+    };
+    desktop.__agentesDesktop = { platform: "linux" };
+    let requested = false;
+    let stopped = false;
+    const stream = await navigator.mediaDevices.getUserMedia();
+    navigator.mediaDevices.getUserMedia = async () => {
+      requested = true;
+      return {
+        ...stream,
+        getTracks: () =>
+          stream.getTracks().map((track) => ({
+            ...track,
+            stop: () => {
+              stopped = true;
+              track.stop();
+            },
+          })),
+      };
+    };
+    const state = seedState({ media: { voiceAvailable: true } });
+    const api = createFakeApi(state);
+    let refuse = () => {};
+    api.voice.allowed = () =>
+      new Promise((resolve) => {
+        refuse = () => resolve({ allowed: false });
+      });
+    await open(state, api);
+    await record();
+    expect(requested).toBe(true);
+    expect(stopped).toBe(false);
+    if (outcome === "abandoned") {
+      cleanup();
+      expect(stopped).toBe(true);
+    }
+    await act(async () => refuse());
+    expect(stopped).toBe(true);
+    if (outcome === "refused") expect(screen().getByRole("button", { name: "Gravar áudio" })).toBeTruthy();
+  });
+});
+
 describe("“gravando áudio…” beside “está digitando…”", () => {
   test("someone recording: three bars where the dots are, their face, their words; writing takes over, their message ends it", async () => {
     const { socket } = await open();

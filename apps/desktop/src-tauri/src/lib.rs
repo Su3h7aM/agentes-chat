@@ -21,6 +21,7 @@ mod host_sync;
 mod local_server;
 mod main_window;
 mod menus;
+mod microphone;
 mod notch;
 mod prepare;
 mod problem_report;
@@ -768,6 +769,7 @@ pub fn run() {
         .manage(cover::Cover::default())
         .manage(dock::Dock::default())
         .manage(menus::MenuParts::default())
+        .manage(microphone::Decision::default())
         .manage(window_state::LastSaved::default())
         .manage(prepare::Resumed::default())
         .manage(UpdateDownload::default())
@@ -833,6 +835,7 @@ pub fn run() {
             main_window::this_mac_listening,
             main_window::notify_site_set,
             main_window::pair_ask,
+            microphone::microphone_decide,
             workspaces::workspaces_get,
             workspaces::site_fetch,
             workspaces::welcome_mode_take,
@@ -996,6 +999,7 @@ fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
         WindowEvent::CloseRequested { .. } if MADE_ON_OPEN.contains(&window.label()) => {
             prepare::closed(window.app_handle(), window.label());
         }
+        WindowEvent::CloseRequested { .. } if window.label() == microphone::LABEL => {}
         WindowEvent::CloseRequested { api, .. } => {
             // The other windows are made once and only hidden; quitting goes through "Quit".
             api.prevent_close();

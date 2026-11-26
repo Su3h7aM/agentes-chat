@@ -475,6 +475,10 @@
     "keepOn": "Listo",
     "keepOff": "Todavía no"
   },
+  "microphone": {
+    "title": "¿Permitir el acceso al micrófono?",
+    "body": "Así puedes grabar mensajes de voz en {{server}}."
+  },
   "pair": {
     "title": "¿Dejar que los agentes de {{org}} trabajen en esta {{device}}?",
     "body": "{{host}} lo pidió. Los agentes tendrán comandos, navegador y herramientas de código. Las carpetas, luego en Preferencias.",

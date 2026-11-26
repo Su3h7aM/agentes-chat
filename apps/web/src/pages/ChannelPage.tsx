@@ -3054,10 +3054,14 @@ function ChannelView({
   const voiceSettings = useSettings(org.id);
   const voiceOn = micShown(voiceSettings.data);
   const voiceSetup = useVoiceSetup(voiceSettings.data);
+  const linuxDesktop = desktopPlatform() === "linux";
   const voice: ComposerVoice | undefined =
     voiceOn && !chrome?.locked && !missionReply
       ? {
           scope: `${channel.id}:${thread?.id ?? ""}`,
+          // WebKitGTK can advertise AAC and produce an empty recording. Its Opus encoder ships with the Linux app.
+          preferredTypes: linuxDesktop ? ["audio/webm;codecs=opus", "audio/webm"] : undefined,
+          requestFromGesture: linuxDesktop,
           allowed: async () => {
             const asked = await voiceSetup.ask();
             if (!asked) return false;
@@ -3104,11 +3108,14 @@ function ChannelView({
           onNotice: (notice: VoiceNotice) => {
             if (notice === "blocked") {
               // In the Mac app the way out opens right there: System Settings on the microphone's list.
-              if (desktopPlatform() === "mac")
+              const platform = desktopPlatform();
+              if (platform === "mac")
                 toast.show(t("voice.blockedMac"), "error", {
                   label: t("voice.openMacSettings"),
                   run: () => void thisMac.openMicrophoneSettings().catch(() => {}),
                 });
+              else if (platform === "linux") toast.show(t("voice.blockedLinux"), "error");
+              else if (platform === "windows") toast.show(t("voice.blockedWindows"), "error");
               else toast.show(t("voice.blockedWeb"), "error");
             } else {
               toast.show(t(`voice.${notice}`), notice === "deleted" ? undefined : "error");

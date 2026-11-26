@@ -14,8 +14,6 @@ export default defineConfig({
     outDir: "dist",
     target: "safari15",
     sourcemap: false,
-    // The windows' app (index.html) and the main window's cover (cover.html, cover.rs), on its own: small,
-    // and it opens without the rest.
-    rollupOptions: { input: { main: "index.html", cover: "cover.html" } },
+    rollupOptions: { input: { main: "index.html", cover: "cover.html", microphone: "microphone.html" } },
   },
 });

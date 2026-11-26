@@ -508,6 +508,10 @@ export const desktopPtBR = {
     keepOn: "Feito",
     keepOff: "Ainda não",
   },
+  microphone: {
+    title: "Permitir acesso ao microfone?",
+    body: "Assim você pode gravar mensagens de voz em {{server}}.",
+  },
   /** The system's own dialog before a page pairs this computer (main_window.rs draws it). */
   pair: {
     title: "Deixar os agentes de {{org}} trabalharem neste {{device}}?",

@@ -11537,6 +11537,8 @@
     "refused": "Ses bu konuşmada gönderilemedi.",
     "blockedMac": "Mikrofon engellendi. Mac'te: Sistem Ayarları › Gizlilik ve Güvenlik › Mikrofon.",
     "openMacSettings": "Mac Ayarlarını aç",
+    "blockedLinux": "Uygulamada mikrofon erişimi engellendi. Ses ayarlarını kontrol edip kaydetmeyi tekrar dene.",
+    "blockedWindows": "Mikrofon erişimi engellendi. Windows Ayarları’nda masaüstü uygulamalarının mikrofona erişmesine izin ver.",
     "blockedWeb": "Mikrofon engellendi. Site adresinin yanındaki kilit simgesinden izin verin.",
     "noMic": "Mikrofon bulunamadı.",
     "failed": "Mikrofon açılamadı. Tekrar deneyin.",

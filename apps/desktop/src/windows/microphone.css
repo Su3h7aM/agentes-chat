@@ -1,0 +1,18 @@
+body,
+.ac-dialog__scrim {
+  background: transparent;
+}
+
+/* This dialog is already inside its own modal window, even at narrow widths. */
+.ac-dialog.dk-microphone {
+  inset: 0;
+  margin: auto;
+  width: min(var(--ac-dialog-width), calc(100% - 2 * var(--space-4)));
+  max-height: calc(100% - 2 * var(--space-4));
+  overflow-y: auto;
+  border-radius: var(--radius-section);
+}
+
+.dk-microphone .ac-dialog__desc {
+  overflow-wrap: anywhere;
+}

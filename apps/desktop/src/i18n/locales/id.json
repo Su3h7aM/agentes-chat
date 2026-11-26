@@ -467,6 +467,10 @@
     "keepOn": "Selesai",
     "keepOff": "Belum"
   },
+  "microphone": {
+    "title": "Izinkan akses ke mikrofon?",
+    "body": "Dengan ini kamu bisa merekam pesan suara di {{server}}."
+  },
   "pair": {
     "title": "Izinkan agen {{org}} bekerja di {{device}} ini?",
     "body": "{{host}} memintanya. Agen dapat perintah, browser, dan alat coding di sini. Folder ditambahkan nanti di Preferensi.",

@@ -12471,6 +12471,8 @@
     "refused": "Nie udało się wysłać nagrania w tej rozmowie.",
     "blockedMac": "Mikrofon jest zablokowany. Na Macu: Ustawienia systemowe › Prywatność i ochrona › Mikrofon.",
     "openMacSettings": "Otwórz Ustawienia Maca",
+    "blockedLinux": "Dostęp do mikrofonu jest zablokowany w aplikacji. Sprawdź ustawienia dźwięku i spróbuj nagrać ponownie.",
+    "blockedWindows": "Dostęp do mikrofonu jest zablokowany. Zezwól aplikacjom klasycznym na dostęp do mikrofonu w ustawieniach systemu Windows.",
     "blockedWeb": "Mikrofon jest zablokowany. Zezwól na niego przez kłódkę obok adresu strony.",
     "noMic": "Nie znaleziono mikrofonu.",
     "failed": "Nie udało się otworzyć mikrofonu. Spróbuj ponownie.",

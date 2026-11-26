@@ -28189,6 +28189,12 @@
   "voice.openMacSettings": {
     "value": "Open Mac Settings"
   },
+  "voice.blockedLinux": {
+    "value": "Microphone access is blocked in the app. Check your sound settings and try recording again."
+  },
+  "voice.blockedWindows": {
+    "value": "Microphone access is blocked. In Windows Settings, allow desktop apps to access the microphone."
+  },
   "voice.blockedWeb": {
     "value": "The microphone is blocked. Allow it from the lock next to the site's address."
   },

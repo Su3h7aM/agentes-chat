@@ -12165,6 +12165,9 @@ export const ptBR = {
     refused: "O áudio não pôde ser enviado nesta conversa.",
     blockedMac: "O microfone está bloqueado. No Mac: Ajustes do Sistema › Privacidade › Microfone.",
     openMacSettings: "Abrir Ajustes do Mac",
+    blockedLinux: "O microfone está bloqueado no aplicativo. Confira as configurações de som e tente gravar novamente.",
+    blockedWindows:
+      "O microfone está bloqueado. Em Configurações do Windows, permita o acesso ao microfone para aplicativos de desktop.",
     blockedWeb: "O microfone está bloqueado. Libere pelo cadeado ao lado do endereço do site.",
     noMic: "Nenhum microfone encontrado.",
     failed: "Não deu para abrir o microfone. Tente de novo.",

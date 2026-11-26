@@ -11981,6 +11981,8 @@
     "refused": "No se pudo enviar el audio en esta conversación.",
     "blockedMac": "El micrófono está bloqueado. En una Mac: Ajustes del Sistema › Privacidad y seguridad › Micrófono.",
     "openMacSettings": "Abrir Ajustes del Mac",
+    "blockedLinux": "El acceso al micrófono está bloqueado en la aplicación. Revisa los ajustes de sonido e intenta grabar de nuevo.",
+    "blockedWindows": "El acceso al micrófono está bloqueado. En la configuración de Windows, permite que las aplicaciones de escritorio accedan al micrófono.",
     "blockedWeb": "El micrófono está bloqueado. Permítelo desde el candado junto a la dirección del sitio.",
     "noMic": "No se encontró ningún micrófono.",
     "failed": "No se pudo abrir el micrófono. Inténtalo de nuevo.",

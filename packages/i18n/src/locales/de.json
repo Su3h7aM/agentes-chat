@@ -11602,6 +11602,8 @@
     "refused": "Das Audio konnte in dieser Unterhaltung nicht gesendet werden.",
     "blockedMac": "Das Mikrofon ist blockiert. Auf dem Mac: Systemeinstellungen › Datenschutz & Sicherheit › Mikrofon.",
     "openMacSettings": "Mac-Einstellungen öffnen",
+    "blockedLinux": "Der Mikrofonzugriff ist in der App blockiert. Prüfe die Toneinstellungen und versuche erneut aufzunehmen.",
+    "blockedWindows": "Der Mikrofonzugriff ist blockiert. Erlaube Desktop-Apps in den Windows-Einstellungen den Zugriff auf das Mikrofon.",
     "blockedWeb": "Das Mikrofon ist blockiert. Erlaube es über das Schloss neben der Adresse der Website.",
     "noMic": "Kein Mikrofon gefunden.",
     "failed": "Das Mikrofon ließ sich nicht öffnen. Versuch es noch mal.",

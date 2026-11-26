@@ -519,6 +519,10 @@ export const desktopEn = {
     keepOn: "Done",
     keepOff: "Not yet",
   },
+  microphone: {
+    title: "Allow access to the microphone?",
+    body: "This lets you record voice messages on {{server}}.",
+  },
   pair: {
     title: "Let agents of {{org}} work on this {{device}}?",
     /**

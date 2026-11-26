@@ -11672,6 +11672,8 @@
     "refused": "De audio kon niet in dit gesprek worden verstuurd.",
     "blockedMac": "De microfoon is geblokkeerd. Op een Mac: Systeeminstellingen › Privacy en beveiliging › Microfoon.",
     "openMacSettings": "Mac-instellingen openen",
+    "blockedLinux": "Microfoontoegang is geblokkeerd in de app. Controleer je geluidsinstellingen en probeer opnieuw op te nemen.",
+    "blockedWindows": "Microfoontoegang is geblokkeerd. Sta in Windows-instellingen toe dat desktop-apps de microfoon gebruiken.",
     "blockedWeb": "De microfoon is geblokkeerd. Sta hem toe via het slotje naast het adres van de site.",
     "noMic": "Geen microfoon gevonden.",
     "failed": "Kon de microfoon niet openen. Probeer het opnieuw.",
