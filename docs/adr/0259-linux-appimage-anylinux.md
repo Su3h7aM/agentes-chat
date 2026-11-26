@@ -178,3 +178,16 @@ still get the icon in the title bar and the taskbar, and a new pick shows the ne
 Not done: Tauri's `enableGTKAppId`, which makes the GTK application register on the session bus under the identifier
 (its own documentation says it prevents a second instance), and an `xdg-toplevel-icon-v1` client, which would need a
 Wayland client written beside GTK 3 for a protocol only some compositors have.
+
+## Addendum 2026-11-26: file managers can read the icon without understanding DwarFS
+
+The AppDir has the right desktop entry and `.DirIcon`, but KDE Dolphin still showed the generic AppImage icon. Its
+thumbnailer uses `libappimage`, which reads the SquashFS at the end of an AppImage's runtime and cannot read the DwarFS
+payload. This is a known limitation in `libappimage` ([issue #208](https://github.com/AppImageCommunity/libappimage/issues/208)).
+
+The decision: keep the DwarFS payload and enable appimagetool 0.7.1's `SQUASHFS_METADATA_SIDECAR=1`. The tool puts a
+fixed 128 KiB SquashFS image between the runtime and the DwarFS payload. It holds `.DirIcon`, the desktop entry and a
+stub `AppRun`; the pinned uruntime skips it and mounts the real payload. SquashFS-only thumbnailers and desktop
+integration tools can now read the icon and entry. The build installs `squashfs-tools`, reads that sidecar back and
+fails if its icon differs from the AppDir's or its desktop entry loses `Icon=agentes-chat` and
+`StartupWMClass=agentes-chat`.

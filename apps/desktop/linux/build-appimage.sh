@@ -195,8 +195,8 @@ verify_appdir() {
     exit 1
   fi
   if ! grep -qx "StartupWMClass=$APP_ID" "$appdir/$APP_ID.desktop" || ! grep -qx "Icon=$APP_ID" "$appdir/$APP_ID.desktop" \
-    || [ ! -f "$appdir/$APP_ID.png" ]; then
-    echo "$APP_ID.desktop doesn't carry StartupWMClass=$APP_ID and Icon=$APP_ID, or its icon is missing" >&2
+    || [ ! -f "$appdir/$APP_ID.png" ] || ! cmp -s "$appdir/$APP_ID.png" "$appdir/.DirIcon"; then
+    echo "$APP_ID.desktop doesn't carry StartupWMClass=$APP_ID and Icon=$APP_ID, or its icon is missing from the AppDir" >&2
     exit 1
   fi
   stray=$(find "$appdir" \( -name 'libvulkan*' -o -name '*.icd.json' \) | head -5)
@@ -217,6 +217,34 @@ verify_appdir() {
       exit 1
     fi
   done
+}
+
+# KDE and other desktops read an AppImage's icon through libappimage, which only understands SquashFS. appimagetool
+# 0.7.1 can keep the DwarFS payload and put .DirIcon, the desktop entry and a stub AppRun in a 128 KiB SquashFS sidecar
+# between the runtime and the payload. Check that sidecar before the image leaves the build.
+verify_appimage() {
+  local image=$1 offset sidecar=$WORK/appimage-metadata.squashfs desktop=$WORK/appimage.desktop
+  offset=$(readelf -h "$image" | awk '
+    /Start of section headers:/ {start=$5}
+    /Number of section headers:/ {count=$5}
+    /Size of section headers:/ {size=$5}
+    END {print start + count * size}
+  ')
+  if [ "$(dd if="$image" bs=1 skip="$offset" count=4 status=none)" != hsqs ]; then
+    echo "The AppImage has no SquashFS metadata sidecar for its icon" >&2
+    exit 1
+  fi
+  dd if="$image" of="$sidecar" bs=1 skip="$offset" count=131072 status=none
+  unsquashfs -cat "$sidecar" .DirIcon > "$WORK/appimage-icon.png"
+  if ! cmp -s "$WORK/appimage-icon.png" "$WORK/stage/AppDir/.DirIcon"; then
+    echo "The AppImage metadata sidecar doesn't carry the app's icon" >&2
+    exit 1
+  fi
+  unsquashfs -cat "$sidecar" "$APP_ID.desktop" > "$desktop"
+  if ! grep -qx "StartupWMClass=$APP_ID" "$desktop" || ! grep -qx "Icon=$APP_ID" "$desktop"; then
+    echo "The AppImage metadata sidecar doesn't carry the app's desktop identity" >&2
+    exit 1
+  fi
 }
 
 # The one place that decides the AppImage's contents. quick-sharun deploys the binary's libraries and WebKit's helper
@@ -298,9 +326,10 @@ export OUTPATH=$WORK/image OUTNAME ARCH
 # repository variable.
 unset UPINFO GITHUB_REPOSITORY
 rm -rf "$OUTPATH"
-quick-sharun --make-appimage
+SQUASHFS_METADATA_SIDECAR=1 quick-sharun --make-appimage
 IMAGE=$OUTPATH/$OUTNAME
 test -s "$IMAGE"
+verify_appimage "$IMAGE"
 
 # Runs the AppImage for 10 s on a virtual screen inside this container (extracted, no FUSE): never on a real display.
 export APPIMAGE_EXTRACT_AND_RUN=1

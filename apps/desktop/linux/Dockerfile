@@ -27,13 +27,17 @@ ENV GST_PLUGINS_REQUIRED="playback coreelements typefindfunctions audioconvert a
 
 # Build: rust and the headers Tauri compiles against (webkit2gtk-4.1 and gtk3 are replaced by the debloated builds
 # below), xdotool for libxdo. Run: the stream plugins WebKit plays media with, bwrap and xdg-dbus-proxy (WebKit's
-# sandbox). And what quick-sharun and its --test need: xvfb, dbus, file, patchelf, binutils, base-devel.
+# sandbox). And what quick-sharun and its --test need: xvfb, dbus, file, patchelf, binutils and base-devel.
 RUN pacman-key --init \
  && pacman -Syu --noconfirm --needed archlinux-keyring \
  && pacman -S --noconfirm --needed \
       base-devel binutils curl dbus file git jq patchelf perl pkgconf unzip wget xdotool xorg-server-xvfb \
       rust openssl librsvg libayatana-appindicator webkit2gtk-4.1 gtk3 \
       gst-plugins-base gst-plugins-good bubblewrap xdg-dbus-proxy
+
+# The metadata-sidecar check reads the small SquashFS image appimagetool puts before the DwarFS payload. Refresh the
+# package databases here because the cached layer above can be older than the packages on the current Arch mirrors.
+RUN pacman -Syy --noconfirm --needed squashfs-tools
 
 RUN set -eu; \
     case "$(uname -m)" in \
