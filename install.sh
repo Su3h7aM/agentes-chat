@@ -26,7 +26,7 @@ main() {
   # The setup this installer hands over to, the Bun it runs on, and the Compose plugin it installs
   # when Docker has none (or one older than the 2.23.1 the compose file needs).
   SETUP_VERSION=0.1.1
-  BUN_VERSION=1.4.4
+  BUN_VERSION=1.4.5
   COMPOSE_VERSION=5.5.1
   MIN_COMPOSE=2.23.1
   INSTALL_URL=https://agentes.chat/install
@@ -82,26 +82,26 @@ main() {
       PLATFORM="Linux on x64"
       # Baseline: server CPUs may lack AVX2.
       BUN_TARGET=linux-x64-baseline
-      BUN_SHA256=e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76
+      BUN_SHA256=dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463
       COMPOSE_ASSET=docker-compose-linux-x86_64
       COMPOSE_SHA256=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
       ;;
     Linux-aarch64 | Linux-arm64)
       PLATFORM="Linux on arm64"
       BUN_TARGET=linux-aarch64
-      BUN_SHA256=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
+      BUN_SHA256=18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84
       COMPOSE_ASSET=docker-compose-linux-aarch64
       COMPOSE_SHA256=732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7
       ;;
     Darwin-x86_64)
       PLATFORM="macOS on Intel"
       BUN_TARGET=darwin-x64-baseline
-      BUN_SHA256=d4a155adfbfd09155eb3ba05c9e3a544f39297d7a68616d3c7759f67ab5c47dc
+      BUN_SHA256=fb0121739a7e80e7511b6bfe4d2116422b48ba18a013acadef0c425348e95891
       ;;
     Darwin-arm64)
       PLATFORM="macOS on Apple silicon"
       BUN_TARGET=darwin-aarch64
-      BUN_SHA256=c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510
+      BUN_SHA256=b5d6bc2e13caf14e57c89661e89efd073ff16165b41bfe43882616410609cd10
       ;;
     *)
       die "agentes.chat installs on macOS or Linux, on x64 or arm64, and this is $OS on $ARCH." \

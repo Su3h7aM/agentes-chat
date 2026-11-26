@@ -32,14 +32,14 @@ export function withoutTrailingSlashes(address: string): string {
  * need: the one the repo builds and tests with (`packageManager` in
  * package.json, kept equal by a test).
  */
-export const RUNNER_BUN_VERSION = "1.4.4";
+export const RUNNER_BUN_VERSION = "1.4.5";
 /** SHA-256 (hex) of each `bun-<target>.zip` of `RUNNER_BUN_VERSION`, checked before it is installed. */
 export const RUNNER_BUN_SHA256 = {
-  "linux-x64": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
-  "linux-x64-baseline": "e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76",
-  "linux-aarch64": "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
-  "darwin-x64-baseline": "d4a155adfbfd09155eb3ba05c9e3a544f39297d7a68616d3c7759f67ab5c47dc",
-  "darwin-aarch64": "c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510",
+  "linux-x64": "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb",
+  "linux-x64-baseline": "dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463",
+  "linux-aarch64": "18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84",
+  "darwin-x64-baseline": "fb0121739a7e80e7511b6bfe4d2116422b48ba18a013acadef0c425348e95891",
+  "darwin-aarch64": "b5d6bc2e13caf14e57c89661e89efd073ff16165b41bfe43882616410609cd10",
 } as const;
 
 /**
@@ -1140,8 +1140,8 @@ export function expiredLinkScriptPowerShell(): string {
 
 /** SHA-256 (hex) of each Windows `bun-<target>.zip` of `RUNNER_BUN_VERSION` (x64: the baseline build, any CPU). */
 export const RUNNER_BUN_WINDOWS_SHA256 = {
-  "windows-x64-baseline": "0f20ce6674d4f2dbcc8c5d59fdf99f7ba45f8c3b367e0f5781cbfa30a1c78d99",
-  "windows-aarch64": "2d57a0eec0cb44d95c918c3f9734f60455a1306ae5085d76fc68f44e3ee30d09",
+  "windows-x64-baseline": "3c081c73865e7a3453a9d514cc2ba3d699880621bcf67bb17241ff5194cb1d4b",
+  "windows-aarch64": "41f57d49c3c6811888d9633c569e40b4eb1f7e92b5e5336e3abd3af03187d77a",
 } as const;
 
 /**

@@ -58,7 +58,7 @@ const fakeNode = (version: string) =>
 
 /**
  * A computer for the install script: Linux (or a Mac) on arm64, a curl that serves the runner and
- * `FAKE_ZIP`, an unzip that "unpacks" a Bun 1.4.4, the runtimes given, and the real tools the script uses.
+ * `FAKE_ZIP`, an unzip that "unpacks" the pinned Bun, the runtimes given, and the real tools the script uses.
  */
 function fakeComputer(runtimes: { bun?: string; homeBun?: string; node?: string }, system = "Linux") {
   const root = tempDir("install-script-");
@@ -254,7 +254,7 @@ test.skipIf(process.platform === "win32")(
     const pc = fakeComputer({ bun: fakeBun(RUNNER_BUN_VERSION, true) });
     const r = pc.install(installScript("https://x.test"));
     expect(r.status).toBe(0);
-    expect(r.out).toStartWith("agentes.chat connect this computer\n◇  Bun 1.4.4 (");
+    expect(r.out).toStartWith(`agentes.chat connect this computer\n◇  Bun ${RUNNER_BUN_VERSION} (`);
     expect(r.out).toContain("◒  Downloading the runner from https://x.test\n◇  The runner, from https://x.test\n");
     expect(r.out).toContain(
       `●  To use the agentes-runner command, add it to your PATH:\n     export PATH="${pc.home}/.agentes-runner/bin:$PATH"\n`,

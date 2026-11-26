@@ -670,15 +670,15 @@ describe("hold to approve inside a message", () => {
     expect(hold).toContain('export const OWN_HOLD = "own-hold";');
     expect(hold).toContain("testID={OWN_HOLD}");
     // The menu's view returns no menu before it cancels the press's touches.
-    const patch = read("patches/expo-router@58.0.23.patch");
+    const patch = read("patches/expo-router@58.0.33.patch");
     expect(patch).toContain('current.accessibilityIdentifier == "own-hold"');
     expect(patch).toMatch(
       /\+\s+if startsOnOwnHold\(interaction, at: location\) \{\n\+\s+return nil\n\+\s+\}\n\s+cancelReactNativeTouches\(\)/,
     );
-    expect(JSON.parse(read("package.json")).patchedDependencies["expo-router@58.0.23"]).toBe(
-      "patches/expo-router@58.0.23.patch",
+    expect(JSON.parse(read("package.json")).patchedDependencies["expo-router@58.0.33"]).toBe(
+      "patches/expo-router@58.0.33.patch",
     );
     // The version patched is the one installed: a newer expo-router has to carry the patch over.
-    expect(read("bun.lock")).toContain('"expo-router": ["expo-router@58.0.23"');
+    expect(read("bun.lock")).toContain('"expo-router": ["expo-router@58.0.33"');
   });
 });

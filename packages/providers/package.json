@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "openai": "^7.33.0"
+    "openai": "^7.65.0"
   },
   "devDependencies": {},
   "license": "AGPL-3.0-only"

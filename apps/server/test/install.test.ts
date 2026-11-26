@@ -173,7 +173,7 @@ const plain = (text: string) => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").repl
 const linuxRoot: Machine = { os: "Linux", arch: "x86_64", uid: 0 };
 const mac: Machine = { os: "Darwin", arch: "arm64", uid: 501 };
 const bunZip = (target: string) =>
-  `$ curl -fsSL --proto =https --retry 3 -o <tmp>/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-${target}.zip`;
+  `$ curl -fsSL --proto =https --retry 3 -o <tmp>/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-${target}.zip`;
 const composeDownload = (asset: string) =>
   `$ curl -fsSL --proto =https --retry 3 -o <tmp>/docker-compose https://github.com/docker/compose/releases/download/v5.5.1/${asset}`;
 
@@ -337,7 +337,7 @@ describe("install.sh", () => {
   });
 
   test("on a terminal: the logo, the badge and the line; a run that needs root draws none of it before sudo", async () => {
-    const root = await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.4" }, [], { tty: true });
+    const root = await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.5" }, [], { tty: true });
     expect(root.code).toBe(0);
     const screen = plain(root.out);
     expect(screen).toContain("▀");
@@ -366,7 +366,7 @@ describe("install.sh", () => {
 
   test("a real run says what it found, echoes no command, and hands over to the setup in its own frame", async () => {
     const dir = tempDir("dir");
-    const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.4" };
+    const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.5" };
     const run = await plan(machine, ["--dir", dir, "--network", "local"], { real: true });
     expect(run.code).toBe(0);
     expect(run.out).toContain("◇  Docker 26.1.5\n◇  Compose 2.26.1\n");
@@ -381,7 +381,7 @@ describe("install.sh", () => {
 
   test("on a terminal, the setup reads it by its own name: Bun on macOS can't wait for keys on /dev/tty", async () => {
     const dir = tempDir("dir");
-    const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.4" };
+    const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.5" };
     const run = await plan(machine, ["--dir", dir], { real: true, tty: true });
     expect(run.code).toBe(0);
     expect(plain(run.out)).toContain(
@@ -396,7 +396,7 @@ describe("install.sh", () => {
     async () => {
       const dir = tempDir("dir");
       const device = join(tempDir("device"), "name");
-      const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.4" };
+      const machine = { ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.5" };
       // Its terminal as after su: /dev/tty opens, the device by its name doesn't.
       const before = `d=$(${Bun.which("tty")}) && echo "$d" > ${device} && ${Bun.which("chmod")} u-r "$d"`;
       try {
@@ -528,7 +528,7 @@ describe("install.sh", () => {
     for (const run of [
       await plan(user, ["--computer", "yes", "--computer", "no"]),
       await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1" }, ["--computer", "yes"]),
-      await plan({ ...mac, docker: "28.5.1", bun: "1.4.4" }, ["--computer", "yes"]),
+      await plan({ ...mac, docker: "28.5.1", bun: "1.4.5" }, ["--computer", "yes"]),
     ]) {
       expect(run.code).toBe(0);
       expect(run.out).not.toContain("sudo");
@@ -545,11 +545,11 @@ describe("install.sh", () => {
   });
 
   test("a Mac with Docker running: Docker, and the bun it already has", async () => {
-    const run = await plan({ ...mac, docker: "28.5.1", bun: "1.4.4" }, ["--network", "local"]);
+    const run = await plan({ ...mac, docker: "28.5.1", bun: "1.4.5" }, ["--network", "local"]);
     expect(run.code).toBe(0);
     expect(run.out).toContain("◇  macOS on Apple silicon");
     expect(run.out).toContain("◇  Docker 28.5.1");
-    expect(run.out).toContain(`◇  Bun 1.4.4 (${run.bin}/bun)`);
+    expect(run.out).toContain(`◇  Bun 1.4.5 (${run.bin}/bun)`);
     expect(run.out).toContain(`$ cd ${run.home}/agentes`);
     expect(run.out).toContain(`$ ${run.bin}/bun x --bun @agenteschat/setup@0.1.1 --network local </dev/null`);
     expect(run.out).not.toContain("--native");
@@ -585,7 +585,7 @@ describe("install.sh", () => {
   });
 
   test("a Mac with Colima stopped: started (--yes), then the wait for Docker to answer", async () => {
-    const run = await plan({ ...mac, docker: "down", has: ["colima"], bun: "1.4.4" }, ["--yes"]);
+    const run = await plan({ ...mac, docker: "down", has: ["colima"], bun: "1.4.5" }, ["--yes"]);
     expect(run.code).toBe(0);
     expect(run.out).toContain("◇  Colima isn't running: starting it, once you say yes (--yes doesn't ask)");
     expect(run.out).toContain("$ colima start");
@@ -594,7 +594,7 @@ describe("install.sh", () => {
   });
 
   test("a Mac with no Docker: Colima with Homebrew (--yes), and Homebrew first only on a terminal", async () => {
-    const brew = await plan({ ...mac, has: ["brew"], bun: "1.4.4" }, ["--yes"]);
+    const brew = await plan({ ...mac, has: ["brew"], bun: "1.4.5" }, ["--yes"]);
     expect(brew.code).toBe(0);
     expect(brew.out).toContain("◇  No Docker: installing Colima with Homebrew and starting it");
     expect(brew.out).toContain(`$ ${brew.bin}/brew install colima docker docker-compose`);
@@ -626,7 +626,7 @@ describe("install.sh", () => {
       await plan(linuxRoot, ["--yes", "--network", "local", "--email", "skip"]),
       await plan(linuxRoot, ["--yes", "--computer", "no", "--computer-commands", "no", "--telemetry", "off"]),
       await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1" }, ["--json"]),
-      await plan({ ...mac, docker: "28.5.1", bun: "1.4.4" }, ["--network", "local"]),
+      await plan({ ...mac, docker: "28.5.1", bun: "1.4.5" }, ["--network", "local"]),
       await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1" }, ["--email", "skip"], { piped: text }),
     ];
     for (const run of runs) {
@@ -677,7 +677,7 @@ describe("install.sh", () => {
   test("a local build of the setup, and --json output kept off stdout", async () => {
     const build = join(tempDir("setup"), "index.js");
     writeFileSync(build, "");
-    const run = await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.4" }, ["--json"], {
+    const run = await plan({ ...linuxRoot, docker: "26.1.5", compose: "2.26.1", bun: "1.4.5" }, ["--json"], {
       env: { AGENTES_INSTALL_SETUP: build },
     });
     expect(run.code).toBe(0);

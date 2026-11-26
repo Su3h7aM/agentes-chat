@@ -389,7 +389,7 @@ export class CliCopies {
         for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
           hash.update(chunk);
           done += chunk.length;
-          if (!out.write(chunk)) await new Promise((ok) => out.once("drain", ok));
+          if (!out.write(chunk)) await new Promise<void>((ok) => out.once("drain", ok));
           if (gate(done, total)) this.tell(cli, { state: "fetching", version: pin.version, done, total });
         }
       } finally {

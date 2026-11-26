@@ -367,7 +367,7 @@ describe("output", () => {
     expect(outputLine("\x1b[2m◒  Installing the packages for the agents' browser and screens\x1b[0m")).toBe(
       "Installing the packages for the agents' browser and screens",
     );
-    expect(outputLine("◇  Bun 1.4.4 (SHA-256 checked)")).toBe("Bun 1.4.4 (SHA-256 checked)");
+    expect(outputLine("◇  Bun 1.4.5 (SHA-256 checked)")).toBe("Bun 1.4.5 (SHA-256 checked)");
     expect(outputLine("│  ")).toBe("");
     expect(outputLine("E: Unable to locate package docker-ce")).toBe("E: Unable to locate package docker-ce");
     // The Linux console's marks (TERM=linux), two spaces after them as after the others.
@@ -384,7 +384,7 @@ describe("output", () => {
   test("a failed command's reason is its last line with words, without the mark before it", () => {
     const installer = [
       "agentes.chat connect this computer",
-      "◇  Bun 1.4.4 (SHA-256 checked)",
+      "◇  Bun 1.4.5 (SHA-256 checked)",
       "◒  Downloading the runner from https://agents.example.com",
       "curl: (22) The requested URL returned error: 404",
       "■  download failed",

@@ -5,9 +5,9 @@ FROM ${BASE_IMAGE}
 
 # Bun: the version of the root package.json `packageManager` (build-appimage.sh fails if they differ), with the sha256
 # of each release zip from the release's SHASUMS256.txt.
-ARG BUN_VERSION=1.4.4
-ARG BUN_SHA256_X64=bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c
-ARG BUN_SHA256_AARCH64=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
+ARG BUN_VERSION=1.4.5
+ARG BUN_SHA256_X64=94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb
+ARG BUN_SHA256_AARCH64=18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84
 # pkgforge-dev/Anylinux-AppImages at one commit, never `main`. quick-sharun itself pins sharun, appimagetool and uruntime
 # by sha256, so this commit pins those too.
 ARG ANYLINUX_COMMIT=88f5e3d58a526a35dea20a551571853dfc755703

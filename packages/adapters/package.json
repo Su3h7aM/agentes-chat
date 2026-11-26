@@ -33,7 +33,7 @@
     "mailparser": "^3.9.46",
     "nodemailer": "^10.1.7",
     "postgres": "^3.4.9",
-    "tldts": "7.4.18"
+    "tldts": "7.6.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

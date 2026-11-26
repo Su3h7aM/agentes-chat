@@ -7,13 +7,13 @@ RUN pip install --no-cache-dir --root-user-action=ignore "fonttools[woff]==4.60.
 COPY scripts/fonts /fonts-src
 RUN python -I /fonts-src/build.py /fonts-src/fonts.lock.json /fonts
 
-FROM oven/bun:1.4.4-alpine AS build
+FROM oven/bun:1.4.5-alpine AS build
 WORKDIR /app
 COPY . .
 RUN bun install --frozen-lockfile \
  && bun scripts/native-package.ts image --out /build
 
-FROM oven/bun:1.4.4-alpine
+FROM oven/bun:1.4.5-alpine
 WORKDIR /app
 # A named volume mounted on an empty image directory takes its owner: FILES_DIR in docker-compose.yml.
 RUN install -d -o bun -g bun /data/files /data/speech

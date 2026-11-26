@@ -40,7 +40,7 @@ const TICKS = [190, 340, 460, 550, 620].map((ms) => ms / 700);
 /**
  * The press's mark for iOS: a message's system menu (`MessageMenu`) starts before a hold fills, so a hold inside the
  * message (an approval's) was cancelled and the menu opened instead. A press that starts on a view with this `testID`
- * (its accessibilityIdentifier) opens no menu (`patches/expo-router@58.0.23.patch`).
+ * (its accessibilityIdentifier) opens no menu (`patches/expo-router@58.0.33.patch`).
  */
 export const OWN_HOLD = "own-hold";
 

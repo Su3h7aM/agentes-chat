@@ -30,8 +30,8 @@
   "devDependencies": {
     "prosemirror-model": "1.25.13",
     "prosemirror-state": "1.4.4",
-    "prosemirror-transform": "1.12.6",
-    "prosemirror-view": "1.42.9",
+    "prosemirror-transform": "1.12.7",
+    "prosemirror-view": "1.44.0",
     "y-prosemirror": "1.3.7"
   },
   "license": "AGPL-3.0-only"
