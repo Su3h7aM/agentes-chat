@@ -82,6 +82,7 @@ export function createAnthropicProvider(
     /** The provider's id in `PROVIDERS`. */
     id?: string;
     baseURL?: string;
+    customScope?: string;
     compat?: { toolChoiceAny: boolean; images?: boolean };
     maxRetries?: number;
     /**
@@ -95,6 +96,7 @@ export function createAnthropicProvider(
 ): ModelProvider {
   const id = options.id ?? "anthropic";
   const { compat } = options;
+  const scope = options.customScope ?? id;
   const client = (apiKey: string, workspaceId?: string) =>
     new Anthropic({
       apiKey,
@@ -163,7 +165,7 @@ export function createAnthropicProvider(
           // model's row (`images`) says it does.
           messages: toMessageParams(
             reads ? withoutImages(request.messages, request.model, reads) : request.messages,
-            id,
+            scope,
             withThinking,
             // Anthropic behind a compatible endpoint refuses a 1-hour breakpoint after the system's 5-minute ones.
             compat ? undefined : cacheControl(request),
@@ -257,7 +259,7 @@ export function createAnthropicProvider(
         const dropped: Record<string, number> = {};
         for (const t of message.input_transformations ?? [])
           if (t.type === "thinking_dropped") dropped[t.reason] = (dropped[t.reason] ?? 0) + 1;
-        const blocks = message.content.map((b) => fromContentBlock(b, id));
+        const blocks = message.content.map((b) => fromContentBlock(b, scope));
         const answer = answerSchema ? blocks.find(isAnswer) : undefined;
         // The answer as `output_config.format` gives it: the JSON as the only text, after any thinking.
         const content: ContentBlock[] = answer
@@ -265,7 +267,7 @@ export function createAnthropicProvider(
           : blocks;
         // Only a prefix mismatch takes the later blocks with it; one another model wrote (a fallback) goes alone.
         const [first] = content;
-        if (first && (!withThinking || dropped.prefix_binding_mismatch)) first.restart = id;
+        if (first && (!withThinking || dropped.prefix_binding_mismatch)) first.restart = scope;
         return {
           text: content.map((b) => (b.type === "text" ? b.text : "")).join(""),
           content,
@@ -318,7 +320,7 @@ export function createAnthropicProvider(
               const result = await client(apiKey, workspaceId).beta.messages.countTokens({
                 model: request.model,
                 system: toSystem(request),
-                messages: toMessageParams(request.messages, id),
+                messages: toMessageParams(request.messages, scope),
                 ...(request.tools && request.tools.length > 0 ? { tools: toTools(request.tools, true) } : {}),
               });
               return result.input_tokens;

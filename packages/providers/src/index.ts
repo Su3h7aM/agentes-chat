@@ -35,7 +35,11 @@ export function createModelProviders(
     (Object.entries(PROVIDERS) as [string, ProviderInfo][]).map(([id, p]) => [
       id,
       p.protocol === "custom"
-        ? createCustomProvider({ fetch: options.endpointFetch, version: options.version })
+        ? createCustomProvider({
+            fetch: options.endpointFetch,
+            version: options.version,
+            progressNotes: options.progressNotes,
+          })
         : p.protocol === "openai"
           ? createOpenAIProvider({ progressNotes: options.progressNotes })
           : p.protocol === "gemini"

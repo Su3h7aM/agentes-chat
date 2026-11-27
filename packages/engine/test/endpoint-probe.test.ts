@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { eq, schema } from "@agenteschat/db";
 import { ProviderError } from "@agenteschat/providers";
-import { createCredential, type ModelGateway, probeEndpoint } from "../src";
+import { createCredential, type ModelGateway, probeEndpoint, updateEndpointModels } from "../src";
 import { type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
@@ -120,6 +120,18 @@ test("probe commit preserves concurrent manual and endpoint values", async () =>
     value: true,
     discoveredAt: "2026-01-01T00:00:00.000Z",
   });
+});
+
+test("a probe cannot record attachment evidence after the model API changes", async () => {
+  const id = await endpoint();
+  const concurrent = gateway(async (input) => {
+    await updateEndpointModels(f.db, f.owner.id, f.org.id, id, [{ id: "model", overrides: { api: "responses" } }]);
+    return { text: pdfCode(input), stopReason: "end_turn" };
+  });
+  const result = await probeEndpoint(f.db, concurrent, f.owner.id, f.org.id, id, {});
+  expect(result[0]?.overrides?.api).toBe("responses");
+  expect(result[0]?.discovered?.pdf).toBeUndefined();
+  expect(result[0]?.check).toBeUndefined();
 });
 
 test("automatic and forced gating skip authoritative and manual values", async () => {

@@ -99,6 +99,38 @@ describe("model lists", () => {
     expect(parseEndpointModels("nope")).toEqual([]);
   });
 
+  test("API discovery requires one unambiguous native endpoint", () => {
+    expect(
+      parseEndpointModels({
+        data: [
+          { id: "chat", native_endpoints: ["/v1/chat/completions"] },
+          { id: "messages", native_endpoints: ["/v1/messages"] },
+          { id: "responses", native_endpoints: ["/v1/responses"] },
+          { id: "unknown" },
+          { id: "ambiguous", native_endpoints: ["/v1/messages", "/v1/responses"] },
+          { id: "unrecognized", native_endpoints: ["/v1/messages", "/other"] },
+          ...[
+            "https://host/v1/messages",
+            "//host/v1/messages",
+            "/v1/messages?x=1",
+            "/v1/messages#x",
+            "v1/messages",
+            "/v1/messages//",
+            "toString",
+          ].map((path, index) => ({ id: `invalid${index}`, native_endpoints: [path] })),
+        ],
+      }),
+    ).toEqual([
+      { id: "chat", api: "chat" },
+      { id: "messages", api: "messages" },
+      { id: "responses", api: "responses" },
+      { id: "unknown" },
+      { id: "ambiguous" },
+      { id: "unrecognized" },
+      ...Array.from({ length: 7 }, (_, index) => ({ id: `invalid${index}` })),
+    ]);
+  });
+
   test("the list's address and key by style; a refusal and an oversized list fail with words", async () => {
     const seen: { url: string; headers: Headers }[] = [];
     const answer = (body: string, status = 200) =>
@@ -128,6 +160,296 @@ const chat = (chunks: Record<string, unknown>[]) =>
   `${chunks.map((c) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, ...c })}\n\n`).join("")}data: [DONE]\n\n`;
 
 describe("calls", () => {
+  test("custom Responses isolates catalog capabilities and opaque blocks by credential", async () => {
+    const response = {
+      id: "r",
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      model: "m",
+      output: [{ type: "reasoning", id: "rs_1", summary: [], encrypted_content: "sealed" }],
+      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+    };
+    const { fetcher, requests } = scripted(
+      sse([
+        { type: "response.created", response },
+        { type: "response.completed", response },
+      ]),
+    );
+    const scope = `custom:${CRED}:responses`;
+    const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+      {
+        model: customModelId(CRED, "gpt-6.2-sol"),
+        system: "s",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "opaque",
+                provider: scope,
+                data: { type: "reasoning", id: "matching", summary: [], encrypted_content: "sealed" },
+              },
+              { type: "opaque", provider: "openai", data: { type: "reasoning", id: "foreign", summary: [] } },
+              {
+                type: "opaque",
+                provider: "custom:other:responses",
+                data: { type: "reasoning", id: "other", summary: [] },
+              },
+            ],
+          },
+        ],
+        maxTokens: 100,
+        effort: "high",
+      },
+      {
+        apiKey: "unused",
+        endpoint: { style: "openai", baseURL: "https://gw.example/v1", api: "responses" },
+        onDelta() {},
+      },
+    );
+    expect(requests[0]?.body.include).toBeUndefined();
+    expect(requests[0]?.body.reasoning).toBeUndefined();
+    expect(JSON.stringify(requests[0]?.body.input)).toContain("matching");
+    expect(JSON.stringify(requests[0]?.body.input)).not.toContain("foreign");
+    expect(JSON.stringify(requests[0]?.body.input)).not.toContain("other");
+    expect(result.content).toContainEqual({
+      type: "opaque",
+      provider: scope,
+      data: { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "sealed" },
+    });
+  });
+  test("custom chat and messages replay only opaque blocks from the same credential and API", async () => {
+    for (const api of ["chat", "messages"] as const) {
+      const body =
+        api === "chat"
+          ? chat([
+              {
+                choices: [
+                  {
+                    delta: { reasoning_details: [{ type: "reasoning.text", text: "output", index: 0 }] },
+                    finish_reason: "stop",
+                  },
+                ],
+              },
+            ])
+          : sse([
+              {
+                type: "message_start",
+                message: {
+                  id: "m",
+                  type: "message",
+                  role: "assistant",
+                  content: [],
+                  model: "m",
+                  usage: { input_tokens: 1, output_tokens: 0 },
+                },
+              },
+              {
+                type: "content_block_start",
+                index: 0,
+                content_block: { type: "thinking", thinking: "", signature: "output" },
+              },
+              { type: "content_block_stop", index: 0 },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "end_turn", stop_sequence: null },
+                usage: { output_tokens: 1 },
+              },
+              { type: "message_stop" },
+            ]);
+      const { fetcher, requests } = scripted(body);
+      const scope = `custom:${CRED}:${api}`;
+      const opaque = (provider: string, marker: string) => ({
+        type: "opaque" as const,
+        provider,
+        data: api === "chat" ? { details: [{ text: marker }] } : { type: "thinking", thinking: "", signature: marker },
+      });
+      const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+        {
+          model: id,
+          system: "s",
+          maxTokens: 100,
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                opaque(scope, "matching"),
+                opaque(`custom:other:${api}`, "other"),
+                opaque(`custom:${CRED}:responses`, "wrong-api"),
+                opaque(api === "chat" ? "openrouter" : "anthropic", "first-party"),
+              ],
+            },
+          ],
+        },
+        { apiKey: "unused", endpoint: { style: "openai", baseURL: "https://gw.example/v1", api }, onDelta() {} },
+      );
+      const sent = JSON.stringify(requests[0]?.body.messages);
+      expect(sent).toContain("matching");
+      expect(sent).not.toContain("other");
+      expect(sent).not.toContain("wrong-api");
+      expect(sent).not.toContain("first-party");
+      expect(result.content.some((block) => block.type === "opaque" && block.provider === scope)).toBe(true);
+    }
+  });
+  test("custom Responses drops unencrypted reasoning in a second tool request", async () => {
+    const response = {
+      id: "r",
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      model: "m",
+      output: [
+        { type: "reasoning", id: "plain", summary: [] },
+        { type: "function_call", id: "fc", call_id: "call1", name: "lookup", arguments: "{}", status: "completed" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    };
+    const { fetcher, requests } = scripted(
+      sse([
+        { type: "response.created", response },
+        { type: "response.completed", response },
+      ]),
+    );
+    const provider = createCustomProvider({ fetch: fetcher, maxRetries: 0 });
+    const opts = {
+      apiKey: "unused",
+      endpoint: { style: "anthropic" as const, baseURL: "https://gw.example", api: "responses" as const },
+      onDelta() {},
+    };
+    const first = await provider.stream({ model: id, system: "s", messages: [], maxTokens: 100 }, opts);
+    await provider.stream(
+      {
+        model: id,
+        system: "s",
+        messages: [
+          { role: "assistant", content: first.content },
+          { role: "user", content: [{ type: "tool_result", toolUseId: "call1", content: "done" }] },
+        ],
+        maxTokens: 100,
+      },
+      opts,
+    );
+    expect(requests[0]?.url).toBe("https://gw.example/v1/responses");
+    expect(JSON.stringify(requests[1]?.body.input)).not.toContain("plain");
+    expect(JSON.stringify(requests[1]?.body.input)).toContain("call1");
+  });
+  test("per-model API selects the adapter regardless of legacy style", async () => {
+    const cases = [
+      {
+        api: "chat" as const,
+        style: "anthropic" as const,
+        baseURL: "https://gw.example",
+        path: "/v1/chat/completions",
+        body: chat([{ choices: [{ delta: {}, finish_reason: "stop" }] }]),
+      },
+      {
+        api: "messages" as const,
+        style: "openai" as const,
+        baseURL: "https://gw.example/v1",
+        path: "/v1/messages",
+        body: sse([
+          {
+            type: "message_start",
+            message: {
+              id: "m",
+              type: "message",
+              role: "assistant",
+              content: [],
+              model: "m",
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          { type: "message_stop" },
+        ]),
+      },
+      {
+        api: "responses" as const,
+        style: "openai" as const,
+        baseURL: "https://gw.example/v1",
+        path: "/v1/responses",
+        body: sse([
+          {
+            type: "response.created",
+            response: { id: "r", object: "response", created_at: 1, status: "in_progress", model: "m", output: [] },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "r",
+              object: "response",
+              created_at: 1,
+              status: "completed",
+              model: "m",
+              output: [],
+              usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+            },
+          },
+        ]),
+      },
+    ];
+    for (const c of cases) {
+      const { fetcher, requests } = scripted(c.body);
+      await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+        { model: id, system: "s", messages: [{ role: "user", content: "hi" }], maxTokens: 100 },
+        { apiKey: "unused", endpoint: { style: c.style, baseURL: c.baseURL, api: c.api }, onDelta() {} },
+      );
+      expect(new URL(requests[0]?.url ?? "https://missing.invalid").pathname).toBe(c.path);
+      expect(requests[0]?.body.model).toBe("meta-llama/llama-4:70b");
+      expect(requests[0]?.body[c.api === "responses" ? "input" : "messages"]).toBeDefined();
+    }
+  });
+
+  test("Responses honors known and unknown attachment reads", async () => {
+    const messages = [
+      { role: "user" as const, content: "read" },
+      { role: "assistant" as const, content: [{ type: "tool_use" as const, id: "t1", name: "read_file", input: {} }] },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "tool_result" as const,
+            toolUseId: "t1",
+            content: "file",
+            images: [{ mediaType: "image/png", data: "UE5H" }],
+          },
+        ],
+      },
+    ];
+    const response = {
+      id: "r",
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      model: "m",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+    };
+    for (const enabled of [false, true]) {
+      const { fetcher, requests } = scripted(
+        sse([
+          { type: "response.created", response },
+          { type: "response.completed", response },
+        ]),
+      );
+      const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+        { model: id, system: "s", messages, maxTokens: 100 },
+        {
+          apiKey: "unused",
+          endpoint: {
+            style: "openai",
+            baseURL: "https://gw.example/v1",
+            api: "responses",
+            ...(enabled ? { reads: { image: true } } : {}),
+          },
+          onDelta() {},
+        },
+      );
+      expect(JSON.stringify(requests[0]?.body)).toContain(enabled ? "input_image" : "reads text only");
+      expect(result.imagesLeftOut).toBe(enabled ? undefined : true);
+    }
+  });
+
   test("Chat Completions: the endpoint's address and model id, no OpenRouter extras, usage asked, its cost ignored", async () => {
     const { fetcher, requests } = scripted(
       chat([

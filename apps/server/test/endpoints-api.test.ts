@@ -36,15 +36,17 @@ test("an endpoint: its list, saved with a test per model, its models in the pick
   });
   expect(await listed.json()).toEqual({
     baseURL: "https://gw.example/v1",
+    listingStyle: "openai",
     models: [
       {
         id: "llama-4",
+        apiCheckedAt: expect.any(String),
         discovered: {
           contextWindow: { source: "endpoint", value: 32_000, discoveredAt: expect.any(String) },
           prices: { input: { source: "endpoint", value: 2, discoveredAt: expect.any(String) } },
         },
       },
-      { id: "qwen-3" },
+      { id: "qwen-3", apiCheckedAt: expect.any(String) },
     ],
   });
 

@@ -15,6 +15,7 @@ import {
   type ModelInfo,
   modelInfo,
   modelProvider,
+  normalizeEndpointBase,
   PROVIDERS,
   type ProviderId,
   parseCustomModel,
@@ -218,7 +219,7 @@ export async function createCredential(
     /** Make it the workspace's default key (onboarding does this in the same call). */
     makeDefault?: boolean;
     /** `custom` only, and required there: the endpoint's address, API style and models (ADR 0146). */
-    endpoint?: { style: EndpointStyle; baseURL: string; models: EndpointModel[] };
+    endpoint?: { style: EndpointStyle; listingStyle?: EndpointStyle; baseURL: string; models: EndpointModel[] };
   },
   /**
    * Outbound HTTP for the provider's key check (tests: a fake); `net`: how endpoints may be reached; `keyWrappers`:
@@ -237,6 +238,7 @@ export async function createCredential(
   if (apiKey.length < (custom ? 1 : 8)) throw new ValidationError("apiKey looks too short");
   const endpoint: StoredEndpoint | undefined = input.endpoint && {
     style: input.endpoint.style,
+    ...(input.endpoint.listingStyle ? { listingStyle: input.endpoint.listingStyle } : {}),
     baseURL: await endpointAddress(input.endpoint.baseURL, input.endpoint.style, opts.net ?? { allowPrivate: false }),
     models: cleanEndpointModels(input.endpoint.models),
   };
@@ -315,7 +317,7 @@ const shapeOf = (r: KeyShape) =>
     r.workspaceId ?? null,
     r.options?.organization ?? null,
     r.options?.project ?? null,
-    r.options?.endpoint?.baseURL ?? null,
+    r.options?.endpoint ? normalizeEndpointBase(r.options.endpoint.baseURL, r.options.endpoint.style) : null,
   ]);
 
 /** A saved key's secret, or null when no wrapper here opens it (then it is never taken for a copy). */
@@ -383,7 +385,11 @@ async function resave(
     const before = latest.options.endpoint;
     const endpoint = input.endpoint && {
       ...input.endpoint,
-      models: cleanEndpointModels(input.endpoint.models, before?.style === input.endpoint.style ? before.models : []),
+      style: before?.style ?? input.endpoint.style,
+      ...(input.endpoint.listingStyle || before?.listingStyle
+        ? { listingStyle: input.endpoint.listingStyle ?? before?.listingStyle }
+        : {}),
+      models: cleanEndpointModels(input.endpoint.models, before?.models, before?.style ?? input.endpoint.style),
     };
     const label = input.label === PROVIDERS[input.provider].label ? latest.label : input.label;
     const [r] = await tx

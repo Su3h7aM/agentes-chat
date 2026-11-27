@@ -260,6 +260,10 @@ export interface StreamOptions {
   onNote?(text: string): void;
 }
 
+/** The API a custom endpoint model uses. Chat Completions is the compatibility fallback. */
+export const ENDPOINT_APIS = ["chat", "messages", "responses"] as const;
+export type EndpointApi = (typeof ENDPOINT_APIS)[number];
+
 /**
  * A workspace's own model endpoint (ADR 0146). `baseURL` is what that API's SDK takes: `https://host/v1` for Chat
  * Completions (`openai`), `https://host/anthropic` (no `/v1`) for Anthropic Messages.
@@ -267,6 +271,8 @@ export interface StreamOptions {
 export interface Endpoint {
   style: "openai" | "anthropic";
   baseURL: string;
+  /** The model's API, discovered from the endpoint or overridden by an admin. Absent: the endpoint's style. */
+  api?: EndpointApi;
   reads?: AttachmentReads;
 }
 

@@ -12,6 +12,7 @@ import {
   parsePrice,
   pendingAttachments,
   withChecks,
+  withEndpointAddress,
   withListedModels,
   withoutModel,
   withTypedModel,
@@ -19,6 +20,71 @@ import {
 import { keyRuns, modelChoices, modelOnKey } from "../src/lib/providers";
 
 describe("the endpoint form", () => {
+  test("editing a saved endpoint preserves its manual API", () => {
+    const draft = draftOfEndpoint("gateway", {
+      style: "openai",
+      baseURL: "https://example.com/v1",
+      models: [{ id: "m", overrides: { api: "responses" } }],
+    });
+    expect(endpointModelsOf(draft)).toEqual([{ id: "m", overrides: { api: "responses" } }]);
+  });
+
+  test("a fresh listing clears stale API metadata and keeps the manual API", () => {
+    const draft = draftOfEndpoint("gateway", {
+      style: "openai",
+      baseURL: "https://example.com/v1",
+      models: [
+        {
+          id: "m",
+          overrides: { api: "messages" },
+          discovered: { api: { source: "endpoint", value: "responses", discoveredAt: "2026-01-01T00:00:00.000Z" } },
+        },
+      ],
+    });
+    const refreshed = withListedModels(draft, [{ id: "m", apiCheckedAt: "2026-02-01T00:00:00.000Z" }]);
+    expect(refreshed.models[0]?.discovered?.api).toBeUndefined();
+    expect(endpointModelsOf(refreshed)?.[0]?.overrides?.api).toBe("messages");
+    expect(endpointModelsOf(refreshed)?.[0]?.apiCheckedAt).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  test("changing address clears discovery while retaining manual choices", () => {
+    const at = "2026-01-01T00:00:00Z";
+    const draft = draftOfEndpoint("gateway", {
+      style: "openai",
+      listingStyle: "anthropic",
+      baseURL: "https://a.example/v1",
+      models: [
+        {
+          id: "m",
+          apiCheckedAt: at,
+          discovered: { api: { value: "messages", source: "endpoint", discoveredAt: at } },
+          overrides: { api: "responses" },
+        },
+      ],
+    });
+    expect(withEndpointAddress(draft, draft.baseURL)).toBe(draft);
+    const changed = withEndpointAddress(draft, "https://b.example/v1");
+    expect(changed.listingStyle).toBeUndefined();
+    expect(endpointModelsOf(changed)).toEqual([{ id: "m", overrides: { api: "responses" } }]);
+    expect(withListedModels(changed, [{ id: "m", apiCheckedAt: at }]).models[0]?.apiCheckedAt).toBe(at);
+  });
+
+  test("equivalent timestamp formats do not replace a newer instant", () => {
+    const draft = draftOfEndpoint("gateway", {
+      style: "openai",
+      baseURL: "https://a.example",
+      models: [{ id: "m", apiCheckedAt: "2026-01-01T00:00:00Z" }],
+    });
+    expect(
+      withListedModels(draft, [{ id: "m", apiCheckedAt: "2026-01-01T00:00:00.000Z" }]).models[0]?.apiCheckedAt,
+    ).toBe("2026-01-01T00:00:00Z");
+    const updated = withListedModels(draft, [{ id: "m", apiCheckedAt: "2026-01-01T00:00:00.001Z" }]);
+    expect(updated.models[0]?.apiCheckedAt).toBe("2026-01-01T00:00:00.001Z");
+    expect(withListedModels(updated, [{ id: "m", apiCheckedAt: "2026-01-01T00:00:00Z" }]).models[0]?.apiCheckedAt).toBe(
+      "2026-01-01T00:00:00.001Z",
+    );
+  });
+
   test("a search shows the models ticked when it began first, whatever is typed, then the others that match", () => {
     const models = ["qwen-8b", "deepseek-v4", "qwen-32b", "kimi-k2"].map((id) => ({ id }));
     const pinned = new Set(["deepseek-v4"]);

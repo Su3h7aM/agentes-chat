@@ -10929,6 +10929,8 @@ export const en = {
     manageModels: "Manage models",
     capabilities: {
       automatic: "Automatic",
+      api: "Model API",
+      apiFallback: "{{api}} fallback",
       contextWindow: "Context window (tokens)",
       maxOutputTokens: "Maximum output (tokens)",
       cacheRead: "Cache read",

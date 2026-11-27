@@ -1,5 +1,6 @@
-import { mergeEndpointDiscovery, shouldProbeAttachment } from "@agenteschat/providers/endpoint-discovery";
+import { mergeEndpointApiRefresh, shouldProbeAttachment } from "@agenteschat/providers/endpoint-discovery";
 import type {
+  EndpointApi,
   EndpointAttachment,
   EndpointCheck,
   EndpointCheckResult,
@@ -15,20 +16,26 @@ import type {
 export const CUSTOM_PROVIDER = "custom";
 
 export const ENDPOINT_STYLES: readonly EndpointStyle[] = ["openai", "anthropic"];
+export const ENDPOINT_API_LABELS = {
+  chat: "Chat Completions",
+  messages: "Anthropic Messages",
+  responses: "OpenAI Responses",
+} as const satisfies Record<EndpointApi, string>;
 
 export const ENDPOINT_LIMITS = ["contextWindow", "maxOutputTokens"] as const;
 export const ENDPOINT_PRICES = ["input", "output", "cacheRead", "cacheWrite"] as const;
 export const ENDPOINT_ATTACHMENTS = ["image", "pdf"] as const;
 export type EndpointNumberField = (typeof ENDPOINT_LIMITS)[number] | (typeof ENDPOINT_PRICES)[number];
 
-export interface EndpointModelDraft extends Pick<EndpointModel, "id" | "label" | "discovered"> {
+export interface EndpointModelDraft extends Pick<EndpointModel, "id" | "label" | "discovered" | "apiCheckedAt"> {
   on: boolean;
-  manual?: Partial<Record<EndpointNumberField, string> & Record<EndpointAttachment, boolean>>;
+  manual?: Partial<Record<EndpointNumberField, string> & Record<EndpointAttachment, boolean>> & { api?: EndpointApi };
 }
 
 export interface EndpointDraft {
   name: string;
   style: EndpointStyle;
+  listingStyle?: EndpointStyle;
   baseURL: string;
   apiKey: string;
   models: EndpointModelDraft[];
@@ -49,10 +56,21 @@ export const endpointBaseExample = (style: EndpointStyle) =>
 const MODEL_ID = /^[\w.:/@+-]{1,200}$/;
 export const MAX_ENDPOINT_MODELS = 100;
 
+/** Evidence belongs to the address that produced it, while manual choices survive edits. */
+export function withEndpointAddress(draft: EndpointDraft, baseURL: string): EndpointDraft {
+  if (baseURL === draft.baseURL) return draft;
+  return {
+    ...draft,
+    baseURL,
+    listingStyle: undefined,
+    models: draft.models.map(({ discovered: _discovered, apiCheckedAt: _apiCheckedAt, ...model }) => model),
+  };
+}
+
 /** Refresh metadata, keeping the selection, typed values and any previous attachment test. */
 export function withListedModels(
   draft: EndpointDraft,
-  listed: readonly Pick<EndpointModel, "id" | "label" | "discovered">[],
+  listed: readonly Pick<EndpointModel, "id" | "label" | "discovered" | "apiCheckedAt">[],
 ): EndpointDraft {
   const byId = new Map(listed.map((m) => [m.id, m]));
   const models = draft.models.map((m) => {
@@ -62,7 +80,11 @@ export function withListedModels(
     return {
       ...m,
       label: found.label ?? m.label,
-      discovered: mergeEndpointDiscovery(m.discovered, found.discovered),
+      apiCheckedAt:
+        found.apiCheckedAt && (!m.apiCheckedAt || Date.parse(found.apiCheckedAt) > Date.parse(m.apiCheckedAt))
+          ? found.apiCheckedAt
+          : m.apiCheckedAt,
+      discovered: mergeEndpointApiRefresh(m.discovered, found.discovered, m.apiCheckedAt, found.apiCheckedAt),
     };
   });
   return { ...draft, models: [...models, ...[...byId.values()].map((m) => ({ ...m, on: false }))] };
@@ -138,7 +160,7 @@ export function endpointModelsOf(draft: Pick<EndpointDraft, "models">): Endpoint
   const on = draft.models.filter((m) => m.on);
   if (on.length === 0 || on.length > MAX_ENDPOINT_MODELS) return null;
   const models: EndpointModel[] = [];
-  for (const { id, label, discovered, manual } of on) {
+  for (const { id, label, discovered, apiCheckedAt, manual } of on) {
     const overrides: EndpointOverrides = {};
     for (const field of ENDPOINT_LIMITS) {
       const value = parseLimit(manual?.[field] ?? "");
@@ -157,10 +179,12 @@ export function endpointModelsOf(draft: Pick<EndpointDraft, "models">): Endpoint
       const value = manual?.[field];
       if (value !== undefined) overrides[field] = value;
     }
+    if (manual?.api !== undefined) overrides.api = manual.api;
     models.push({
       id,
       ...(label ? { label } : {}),
       ...(discovered ? { discovered } : {}),
+      ...(apiCheckedAt ? { apiCheckedAt } : {}),
       ...(manual ? { overrides } : {}),
     });
   }
@@ -201,14 +225,15 @@ export const endpointReady = (draft: EndpointDraft) =>
 /** A saved endpoint back in the form (changing its models and prices). */
 export function draftOfEndpoint(
   label: string,
-  endpoint: { style: EndpointStyle; baseURL: string; models: EndpointModel[] },
+  endpoint: { style: EndpointStyle; listingStyle?: EndpointStyle; baseURL: string; models: EndpointModel[] },
 ): EndpointDraft {
   return {
     name: label,
     style: endpoint.style,
+    listingStyle: endpoint.listingStyle,
     baseURL: endpoint.baseURL,
     apiKey: "",
-    models: endpoint.models.map(({ id, label, prices, overrides, discovered }) => {
+    models: endpoint.models.map(({ id, label, prices, overrides, discovered, apiCheckedAt }) => {
       const { prices: manualPrices, ...manual } = overrides ?? {};
       const numericPrices = { ...prices, ...manualPrices };
       const typed: NonNullable<EndpointModelDraft["manual"]> = {};
@@ -220,7 +245,14 @@ export function draftOfEndpoint(
         const value = manual[field];
         if (value !== undefined) typed[field] = String(value);
       }
-      return { id, label, discovered, on: true, manual: { ...typed, image: manual.image, pdf: manual.pdf } };
+      return {
+        id,
+        label,
+        discovered,
+        apiCheckedAt,
+        on: true,
+        manual: { ...typed, image: manual.image, pdf: manual.pdf, api: manual.api },
+      };
     }),
   };
 }

@@ -1407,12 +1407,15 @@ describe("Connect an AI's steps line", () => {
 });
 
 describe("Outro provedor on the phone", () => {
-  test("the API under a header across the width, Buscar modelos on the add line's header, + in the field, × per model", async () => {
+  test("per-model API rows, Buscar modelos on the add line header, + in the field, × per model", async () => {
     // The screen is a component the tests can't render: what it wires in, as text.
     const form = await Bun.file(new URL("../../src/features/ai/EndpointForm.tsx", import.meta.url).pathname).text();
-    expect(form).toContain('<GroupedHeader>{t("endpoint.style")}</GroupedHeader>');
-    expect(form).toContain('wide="fit"');
-    expect(form.indexOf('t("endpoint.style")')).toBeLessThan(form.indexOf('t("endpoint.address")'));
+    expect(form).not.toContain('t("endpoint.style")');
+    expect(form).toContain('<GroupedField label={t("endpoint.capabilities.api")} stacked>');
+    expect(form).toContain("Object.entries(ENDPOINT_API_LABELS)");
+    expect(form).toContain('checked={(m.manual?.api ?? "auto") === value}');
+    expect(form).toContain('api: value === "auto" ? undefined : value');
+    expect(form).toContain("withEndpointAddress(d, baseURL)");
     expect(form).toMatch(
       /<GroupedHeader\s+aside=\{\s*<Button\s+variant="text"\s+size="sm"\s+label=\{t\("endpoint\.fetch"\)\}/,
     );

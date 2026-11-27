@@ -16,7 +16,7 @@ import {
   WALLPAPER_PHOTO_PATH,
   WORKSPACE_MODES,
 } from "@agenteschat/engine";
-import { CONTEXT_LIMITS, ENDPOINT_STYLES, MODEL_TIERS, PROVIDER_IDS } from "@agenteschat/providers";
+import { CONTEXT_LIMITS, ENDPOINT_APIS, ENDPOINT_STYLES, MODEL_TIERS, PROVIDER_IDS } from "@agenteschat/providers";
 import { z } from "@hono/zod-openapi";
 
 /** What we do to the workspace's own computer (`shownMaintenance`, ADR 0257), which the apps say instead of offline. */
@@ -371,6 +371,9 @@ const EndpointLimits = z.object({
 });
 const EndpointPartialPrices = EndpointPrices.partial();
 const EndpointMetadataSource = z.enum(["endpoint", "catalog", "probe"]);
+export const EndpointApi = z.enum(ENDPOINT_APIS).openapi("EndpointApi", {
+  description: "The model's API: Chat Completions, Anthropic Messages or OpenAI Responses.",
+});
 const EndpointLegacyAttachment = z.object({ value: z.boolean(), source: EndpointMetadataSource });
 const EndpointNumberDiscovery = z.object({
   value: z.number().nonnegative(),
@@ -397,6 +400,7 @@ const EndpointDiscovered = z
       .optional(),
     image: EndpointAttachmentDiscovery.optional(),
     pdf: EndpointAttachmentDiscovery.optional(),
+    api: z.object({ value: EndpointApi, source: EndpointMetadataSource, discoveredAt: z.iso.datetime() }).optional(),
   })
   .passthrough();
 const EndpointLegacyDiscovered = z
@@ -420,8 +424,10 @@ export const EndpointModel = z
       prices: EndpointPartialPrices.optional(),
       image: z.boolean().optional(),
       pdf: z.boolean().optional(),
+      api: EndpointApi.optional(),
     }).optional(),
     discovered: z.union([EndpointDiscovered, EndpointLegacyDiscovered]).optional(),
+    apiCheckedAt: z.iso.datetime().optional(),
     check: z
       .enum(["ok", "no_tools", "failed"])
       .optional()
@@ -450,6 +456,7 @@ export const Credential = z
     endpoint: z
       .object({
         style: EndpointStyle,
+        listingStyle: EndpointStyle.optional(),
         baseURL: z.string(),
         models: z.array(EndpointModel),
       })

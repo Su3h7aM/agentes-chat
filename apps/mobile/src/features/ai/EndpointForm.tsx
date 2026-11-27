@@ -7,11 +7,11 @@ import {
   checksInOrder,
   discoveredNumber,
   draftOfEndpoint,
+  ENDPOINT_API_LABELS,
   ENDPOINT_ATTACHMENTS,
   ENDPOINT_LIMITS,
   ENDPOINT_PRICES,
   ENDPOINT_SEARCH_FROM,
-  ENDPOINT_STYLES,
   type EndpointDraft,
   editNumber,
   emptyEndpointDraft,
@@ -26,6 +26,7 @@ import {
   parsePrice,
   pendingAttachments,
   withChecks,
+  withEndpointAddress,
   withListedModels,
   withoutModel,
   withTypedModel,
@@ -110,6 +111,7 @@ export function EndpointForm({
   const locked = saving || listing;
 
   const fetchModels = async () => {
+    const requestedBaseURL = draft.baseURL.trim();
     setListing(true);
     setListError(null);
     try {
@@ -118,12 +120,19 @@ export function EndpointForm({
         credential
           ? { credentialId: credential.id }
           : {
-              style: draft.style,
               baseURL: draft.baseURL.trim(),
               apiKey: draft.apiKey.trim() || undefined,
             },
       );
-      setDraft((d) => ({ ...withListedModels(d, r.models), baseURL: r.baseURL }));
+      setDraft((d) =>
+        credential || d.baseURL.trim() === requestedBaseURL
+          ? {
+              ...withListedModels(d, r.models),
+              baseURL: r.baseURL,
+              listingStyle: r.listingStyle ?? d.listingStyle,
+            }
+          : d,
+      );
       setListError(r.error ?? null);
     } catch (error) {
       setListError(error instanceof Error ? error.message : String(error));
@@ -147,15 +156,27 @@ export function EndpointForm({
       let key: Credential;
       let checks: EndpointCheck[];
       if (credential?.endpoint) {
-        const result = await api.agents.setEndpointModels(orgId, credential.id, models);
-        key = { ...credential, endpoint: { ...credential.endpoint, models: result.models } };
+        const result = await api.agents.setEndpointModels(orgId, credential.id, models, draft.listingStyle);
+        key = {
+          ...credential,
+          endpoint: {
+            ...credential.endpoint,
+            ...(draft.listingStyle ? { listingStyle: draft.listingStyle } : {}),
+            models: result.models,
+          },
+        };
         checks = result.checks;
       } else {
         const { checks: result, ...added } = await api.agents.addCredential(orgId, {
           provider: CUSTOM_PROVIDER,
           label: draft.name.trim(),
           apiKey: draft.apiKey.trim(),
-          endpoint: { style: draft.style, baseURL: draft.baseURL.trim(), models },
+          endpoint: {
+            style: draft.style,
+            ...(draft.listingStyle ? { listingStyle: draft.listingStyle } : {}),
+            baseURL: draft.baseURL.trim(),
+            models,
+          },
         });
         key = added;
         checks = result ?? [];
@@ -261,20 +282,11 @@ export function EndpointForm({
               />
             </GroupedField>
           </GroupedList>
-          <View>
-            <GroupedHeader>{t("endpoint.style")}</GroupedHeader>
-            <Segmented
-              wide="fit"
-              items={ENDPOINT_STYLES.map((s) => ({ key: s, label: t(`endpoint.styles.${s}`) }))}
-              value={draft.style}
-              onChange={(style) => set({ style: style as EndpointDraft["style"] })}
-            />
-          </View>
           <GroupedList>
             <GroupedField label={t("endpoint.address")}>
               <TextInput
                 value={draft.baseURL}
-                onChangeText={(baseURL) => set({ baseURL })}
+                onChangeText={(baseURL) => setDraft((d) => withEndpointAddress(d, baseURL))}
                 placeholder={endpointBaseExample(draft.style)}
                 placeholderTextColor={c.faint}
                 keyboardType="url"
@@ -390,6 +402,29 @@ export function EndpointForm({
                 <View key={m.id} style={styles.gap}>
                   <GroupedHeader>{m.id}</GroupedHeader>
                   <GroupedList>
+                    <GroupedField label={t("endpoint.capabilities.api")} stacked>
+                      <GroupedList>
+                        {[
+                          {
+                            value: "auto" as const,
+                            label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
+                          },
+                          ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({
+                            value: value as keyof typeof ENDPOINT_API_LABELS,
+                            label,
+                          })),
+                        ].map(({ value, label }) => (
+                          <GroupedRow
+                            key={value}
+                            label={label}
+                            checked={(m.manual?.api ?? "auto") === value}
+                            onPress={() =>
+                              setModel(m.id, { manual: { ...m.manual, api: value === "auto" ? undefined : value } })
+                            }
+                          />
+                        ))}
+                      </GroupedList>
+                    </GroupedField>
                     {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
                       const limit = index < ENDPOINT_LIMITS.length;
                       const manual = m.manual?.[field];

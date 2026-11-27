@@ -508,6 +508,7 @@ export function agentRoutes(deps: AppDeps) {
             endpoint: z
               .object({
                 style: EndpointStyle,
+                listingStyle: EndpointStyle.optional(),
                 baseURL: z.string().min(1).max(500),
                 models: z.array(EndpointModel),
               })
@@ -558,7 +559,7 @@ export function agentRoutes(deps: AppDeps) {
           z.union([
             z.object({ credentialId: z.uuid() }),
             z.object({
-              style: EndpointStyle,
+              style: EndpointStyle.optional(),
               baseURL: z.string().min(1).max(500),
               apiKey: z.string().max(500).optional(),
             }),
@@ -569,7 +570,8 @@ export function agentRoutes(deps: AppDeps) {
         200: json(
           z.object({
             baseURL: z.string().openapi({ description: "The address as it will be stored." }),
-            models: z.array(EndpointModel.pick({ id: true, label: true, discovered: true })),
+            listingStyle: EndpointStyle.optional(),
+            models: z.array(EndpointModel.pick({ id: true, label: true, discovered: true, apiCheckedAt: true })),
             error: z.string().optional(),
           }),
         ),
@@ -587,8 +589,8 @@ export function agentRoutes(deps: AppDeps) {
               const saved = await decryptCredential(db, keyWrappers, orgId, input.credentialId);
               if (saved?.provider !== "custom" || !saved.options?.endpoint)
                 throw new NotFoundError("Credential not found");
-              const { style, baseURL } = saved.options.endpoint;
-              return { style, baseURL, apiKey: saved.apiKey };
+              const { style, listingStyle, baseURL } = saved.options.endpoint;
+              return { style, listingStyle, baseURL, apiKey: saved.apiKey };
             })()
           : input;
       const listed = await listEndpoint(db, userId, orgId, source, endpointNet(deps));
@@ -605,14 +607,15 @@ export function agentRoutes(deps: AppDeps) {
       summary: "Change an endpoint's models and prices, then test each again (admins, ADR 0146)",
       request: {
         params: OrgParams.extend({ credentialId: z.uuid() }),
-        body: body(z.object({ models: z.array(EndpointModel) })),
+        body: body(z.object({ models: z.array(EndpointModel), listingStyle: EndpointStyle.optional() })),
       },
       responses: { 200: json(z.object({ models: z.array(EndpointModel), checks: z.array(EndpointCheck) })), ...errors },
     }),
     async (c) => {
       const { orgId, credentialId } = c.req.valid("param");
       const userId = c.get("user").id;
-      await updateEndpointModels(db, userId, orgId, credentialId, c.req.valid("json").models.map(modelIn));
+      const { models, listingStyle } = c.req.valid("json");
+      await updateEndpointModels(db, userId, orgId, credentialId, models.map(modelIn), listingStyle);
       const checks = await endpointChecks(deps, userId, orgId, credentialId);
       const saved = (await listCredentials(db, userId, orgId)).find((r) => r.id === credentialId);
       return c.json({ models: (saved?.endpoint?.models ?? []).map(modelOut), checks }, 200);

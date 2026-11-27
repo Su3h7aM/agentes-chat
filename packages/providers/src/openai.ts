@@ -58,6 +58,8 @@ export function createOpenAIProvider(
     maxRetries?: number;
     /** Ask reasoning models for their reasoning summaries (`reasoning.summary: "auto"`), sent to `onNote`. Default on. */
     progressNotes?: boolean;
+    /** Scope opaque Responses items to a custom credential and disable first-party capabilities. */
+    customScope?: string;
     /** Tests only: scripted transport. */
     fetch?: typeof fetch;
   } = {},
@@ -83,17 +85,17 @@ export function createOpenAIProvider(
         outputTokens: null,
         outputChars: 0,
       };
-      const info = MODEL_CATALOG[request.model];
+      const info = options.customScope ? undefined : MODEL_CATALOG[request.model];
       const effort = request.effort === "none" && info?.leastThinking !== "off" ? "low" : effortWithin(request.effort);
       const call = async (summary: boolean) => {
         const stream = client(apiKey, organization, project).responses.stream(
           {
             model: request.model,
             instructions: systemText(request.system),
-            input: toInput(request.messages),
+            input: toInput(request.messages, options.customScope ?? "openai"),
             max_output_tokens: request.maxTokens,
             store: false,
-            include: ["reasoning.encrypted_content"],
+            ...(options.customScope ? {} : { include: ["reasoning.encrypted_content" as const] }),
             ...(request.tools && request.tools.length > 0 ? { tools: toTools(request) } : {}),
             ...(request.outputSchema
               ? {
@@ -128,7 +130,11 @@ export function createOpenAIProvider(
         if (response.status === "failed") {
           throw new OpenAI.APIError(undefined, response.error ?? undefined, response.error?.message, undefined);
         }
-        return fromResponse(response as unknown as Response);
+        return fromResponse(
+          response as unknown as Response,
+          options.customScope ?? "openai",
+          Boolean(options.customScope),
+        );
       };
       // A model reasoning not at all (`none`) has nothing to summarize.
       const summary = options.progressNotes !== false && Boolean(info?.reasoning && effort) && effort !== "none";
@@ -261,7 +267,7 @@ function toTools(request: ModelRequest): FunctionTool[] {
   }));
 }
 
-function toInput(messages: ModelMessage[]): ResponseInputItem[] {
+function toInput(messages: ModelMessage[], scope: string): ResponseInputItem[] {
   const items: ResponseInputItem[] = [];
   for (const m of messages) {
     if (typeof m.content === "string") {
@@ -297,14 +303,19 @@ function toInput(messages: ModelMessage[]): ResponseInputItem[] {
               ? `ERROR: ${b.content}`
               : b.content,
         });
-      else if (b.type === "opaque" && b.provider === "openai") items.push(b.data as unknown as ResponseInputItem);
+      else if (
+        b.type === "opaque" &&
+        b.provider === scope &&
+        (!scope.startsWith("custom:") || b.data.type !== "reasoning" || b.data.encrypted_content)
+      )
+        items.push(b.data as unknown as ResponseInputItem);
       // Opaque blocks of another provider (e.g. Anthropic thinking) can't be replayed here.
     }
   }
   return items;
 }
 
-function fromResponse(response: Response): ModelResult {
+function fromResponse(response: Response, scope: string, custom: boolean): ModelResult {
   const content: ContentBlock[] = [];
   let refused = false;
   for (const item of response.output as ResponseOutputItem[]) {
@@ -321,8 +332,8 @@ function fromResponse(response: Response): ModelResult {
         input = {};
       }
       content.push({ type: "tool_use", id: item.call_id, name: item.name, input });
-    } else if (item.type === "reasoning") {
-      content.push({ type: "opaque", provider: "openai", data: item as unknown as Record<string, unknown> });
+    } else if (item.type === "reasoning" && (!custom || item.encrypted_content)) {
+      content.push({ type: "opaque", provider: scope, data: item as unknown as Record<string, unknown> });
     }
   }
   const usage = response.usage;

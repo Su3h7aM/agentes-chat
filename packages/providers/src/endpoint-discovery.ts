@@ -1,3 +1,5 @@
+import type { EndpointApi } from "./types";
+
 export type DiscoverySource = "endpoint" | "probe" | "catalog";
 export type Discovered<T> = { value: T; source: DiscoverySource; discoveredAt: string };
 export type DiscoveryPrice = "input" | "output" | "cacheRead" | "cacheWrite";
@@ -7,6 +9,7 @@ export interface EndpointModelDiscovery {
   prices?: Partial<Record<DiscoveryPrice, Discovered<number>>>;
   image?: Discovered<boolean>;
   pdf?: Discovered<boolean>;
+  api?: Discovered<EndpointApi>;
 }
 export function shouldProbeAttachment(
   discovered: { source: DiscoverySource } | undefined,
@@ -97,10 +100,10 @@ export function mergeEndpointDiscovery(
     ...second,
     ...(first?.prices || second?.prices ? { prices: { ...first?.prices, ...second?.prices } } : {}),
   };
-  for (const key of ["contextWindow", "maxOutputTokens", "image", "pdf"] as const) {
+  for (const key of ["contextWindow", "maxOutputTokens", "image", "pdf", "api"] as const) {
     const chosen = choose(
-      first?.[key] as Discovered<number | boolean> | undefined,
-      second?.[key] as Discovered<number | boolean> | undefined,
+      first?.[key] as Discovered<number | boolean | EndpointApi> | undefined,
+      second?.[key] as Discovered<number | boolean | EndpointApi> | undefined,
     );
     if (chosen) Object.assign(result, { [key]: chosen });
   }
@@ -112,4 +115,26 @@ export function mergeEndpointDiscovery(
     }
   }
   return result;
+}
+
+/** Merge an authoritative API refresh, including a listing that contains no API metadata. */
+export function mergeEndpointApiRefresh(
+  before: EndpointModelDiscovery | LegacyEndpointDiscovery | undefined,
+  incoming: EndpointModelDiscovery | LegacyEndpointDiscovery | undefined,
+  previousAt?: string,
+  incomingAt?: string,
+): EndpointModelDiscovery | undefined {
+  const first = normalizeEndpointDiscovery(before);
+  const second = normalizeEndpointDiscovery(incoming);
+  const merged = mergeEndpointDiscovery(first, second);
+  if (!merged) return undefined;
+  const oldAt = previousAt ?? (first?.api?.source === "endpoint" ? first.api.discoveredAt : undefined);
+  if (incomingAt && (!oldAt || Date.parse(incomingAt) >= Date.parse(oldAt))) {
+    if (second?.api) merged.api = second.api;
+    else if (merged.api?.source === "endpoint") delete merged.api;
+  } else if (previousAt && incomingAt && Date.parse(previousAt) > Date.parse(incomingAt)) {
+    if (first?.api) merged.api = first.api;
+    else if (merged.api?.source === "endpoint") delete merged.api;
+  }
+  return merged;
 }

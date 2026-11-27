@@ -19,7 +19,11 @@ const type = (el: Element, value: string) => act(async () => fireEvent.change(el
 describe("Outro provedor in Settings › Chaves de IA", () => {
   test("named, its models fetched and typed, prices on one, saved and tested: each model's result shows", async () => {
     const state = seedState({
-      endpointList: { baseURL: "https://gw.example/v1", models: [{ id: "llama-4" }, { id: "qwen-3" }] },
+      endpointList: {
+        baseURL: "https://gw.example/v1",
+        listingStyle: "anthropic",
+        models: [{ id: "llama-4" }, { id: "qwen-3" }],
+      },
       endpointChecks: { "qwen-3": { model: "qwen-3", check: "no_tools" } },
     });
     await renderApp(`/org/${ORG_ID}/settings/keys`, { api: createFakeApi(state) });
@@ -35,14 +39,17 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1/");
     await type(within(add).getByLabelText("Chave de API"), "gw-key-1234567");
     await click(within(add).getByRole("button", { name: "Buscar modelos" }));
-    expect(state.calls.find((c) => c.method === "agents.endpointModels")?.args[1]).toMatchObject({
-      style: "openai",
+    expect(state.calls.find((c) => c.method === "agents.endpointModels")?.args[1]).toEqual({
       baseURL: "https://gw.example/v1/",
       apiKey: "[redacted]",
     });
     // Listed models start off: nothing to save yet.
     expect(save().hasAttribute("disabled")).toBe(true);
     await click(within(add).getByRole("checkbox", { name: "llama-4" }));
+    expect(within(add).getByRole("combobox", { name: "llama-4 · API do modelo" }).textContent).toContain(
+      "Chat Completions como alternativa",
+    );
+    await pick(within(add).getByRole("combobox", { name: "llama-4 · API do modelo" }), "OpenAI Responses");
     await type(within(add).getByLabelText("llama-4: preço de entrada"), "1");
     await type(within(add).getByLabelText("llama-4: preço de saída"), "2,5");
     await type(within(add).getByLabelText("Adicionar um modelo"), "qwen-3");
@@ -57,14 +64,48 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
       apiKey: "[redacted]",
       endpoint: {
         style: "openai",
+        listingStyle: "anthropic",
         baseURL: "https://gw.example/v1",
-        models: [{ id: "llama-4", overrides: { prices: { input: 1, output: 2.5 } } }, { id: "qwen-3" }],
+        models: [
+          { id: "llama-4", overrides: { api: "responses", prices: { input: 1, output: 2.5 } } },
+          { id: "qwen-3" },
+        ],
       },
     });
     expect(add.textContent).toContain("llama-4 · Funciona, com ferramentas");
     expect(add.textContent).toContain("qwen-3 · Responde, mas não usou ferramenta.");
     await click(within(add).getByRole("button", { name: "Concluir" }));
     expect(screen().queryByRole("dialog", { name: "Adicionar chave de API" })).toBeNull();
+  });
+
+  test("changing the address removes the previous host's discovery before saving", async () => {
+    const at = "2026-11-01T10:00:00.000Z";
+    const state = seedState({
+      endpointList: {
+        baseURL: "https://a.example/v1",
+        listingStyle: "anthropic",
+        models: [
+          {
+            id: "m",
+            apiCheckedAt: at,
+            discovered: { api: { source: "endpoint", value: "messages", discoveredAt: at } },
+          },
+        ],
+      },
+    });
+    await renderApp(`/org/${ORG_ID}/settings/keys`, { api: createFakeApi(state) });
+    await settle(5);
+    await click(screen().getByRole("button", { name: "Adicionar chave" }));
+    const add = screen().getByRole("dialog", { name: "Adicionar chave de API" });
+    await pick(within(add).getByRole("combobox", { name: "Provedor" }), /Outro provedor/);
+    await type(within(add).getByLabelText("Nome"), "Gateway");
+    await type(within(add).getByLabelText("Endereço"), "https://a.example/v1");
+    await click(within(add).getByRole("button", { name: "Buscar modelos" }));
+    await click(within(add).getByRole("checkbox", { name: "m" }));
+    await type(within(add).getByLabelText("Endereço"), "https://b.example/v1");
+    await click(within(add).getByRole("button", { name: "Salvar e testar" }));
+    const saved = state.calls.find((call) => call.method === "agents.addCredential")?.args[1] as { endpoint: unknown };
+    expect(saved.endpoint).toEqual({ style: "openai", baseURL: "https://b.example/v1", models: [{ id: "m" }] });
   });
 
   test("refreshes a saved catalog, restores a legacy price and tests attachments", async () => {
@@ -175,7 +216,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     const body = add.querySelector(".ac-dialog__body") as HTMLElement;
     expect(body.querySelector(".ac-brand__initial")).toBeNull();
     expect(body.querySelector('.ac-brand[data-mark="custom"]')).not.toBeNull();
-    expect(within(body).getByRole("radiogroup", { name: "API" }).closest(".ac-field")).not.toBeNull();
+    expect(within(body).queryByRole("radiogroup", { name: "API" })).toBeNull();
     const fetch = within(body).getByRole("button", { name: "Buscar modelos" });
     expect(fetch.closest(".ac-field__label-row")?.textContent).toContain("Adicionar um modelo");
     expect(fetch.className).not.toContain("ac-btn");

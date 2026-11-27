@@ -958,7 +958,7 @@ export function createModelGateway(deps: ModelGatewayDeps) {
           workspaceId: key.workspaceId,
           organization: key.organization,
           project: key.project,
-          endpoint: key.endpoint && { ...key.endpoint, reads: info.reads },
+          endpoint: key.endpoint && { ...key.endpoint, api: info.api, reads: info.reads },
           ...(call.session ? { session: call.session } : {}),
           onDelta: call.onDelta,
           ...(call.onNote ? { onNote: call.onNote } : {}),
@@ -1397,7 +1397,7 @@ export function createModelGateway(deps: ModelGatewayDeps) {
         result = await provider.stream(request, {
           apiKey: key.apiKey,
           workspaceId: key.workspaceId,
-          endpoint: key.endpoint && { ...key.endpoint, reads: call.endpointReads ?? info.reads },
+          endpoint: key.endpoint && { ...key.endpoint, api: info.api, reads: call.endpointReads ?? info.reads },
           onDelta: () => {},
         });
       } catch (error) {

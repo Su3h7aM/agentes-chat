@@ -1,13 +1,31 @@
 import OpenAI from "openai";
 import { createAnthropicProvider } from "./anthropic";
 import { parseCustomModel } from "./catalog";
-import { openAIImages } from "./openai";
+import { createOpenAIProvider, openAIImages } from "./openai";
 import { createOpenRouterProvider } from "./openrouter";
-import { type Endpoint, type ModelProvider, type ModelResult, ProviderError } from "./types";
+import {
+  type Endpoint,
+  type EndpointApi,
+  hasToolImages,
+  lostWithoutImages,
+  type ModelProvider,
+  type ModelResult,
+  ProviderError,
+  withoutImages,
+} from "./types";
 
 /** The APIs a workspace's own endpoint may speak (a gateway, Ollama, vLLM, LM Studio, LiteLLM…). */
 export type EndpointStyle = Endpoint["style"];
 export const ENDPOINT_STYLES = ["openai", "anthropic"] as const satisfies readonly EndpointStyle[];
+
+/** Normalize stored and entered endpoint addresses without changing OpenAI-compatible custom paths. */
+export function normalizeEndpointBase(raw: string, style: EndpointStyle): string {
+  const url = new URL(raw.trim());
+  const path = url.pathname.replace(/\/+$/, "");
+  let base = path.replace(/\/(?:chat\/completions|responses|models)$/, "").replace(/\/v1\/messages$/, "/v1");
+  if (style === "anthropic" && !base.endsWith("/v1")) base += "/v1";
+  return `${url.origin}${base}`;
+}
 
 const LIST_TIMEOUT_MS = 10_000;
 const LIST_MAX_BYTES = 2_000_000;
@@ -20,6 +38,7 @@ const obj = (v: unknown): Raw | null => (v && typeof v === "object" && !Array.is
 export interface ListedEndpointModel {
   id: string;
   label?: string;
+  api?: EndpointApi;
   caps?: {
     limits?: { contextWindow?: number; maxOutputTokens?: number };
     /** US dollars per million tokens. */
@@ -41,6 +60,25 @@ export function inputAttachmentCapabilities(input: string[], fileIsPdf = false):
     ...(image || complete ? { image } : {}),
     ...(pdf || complete ? { pdf } : {}),
   };
+}
+
+const API_BY_PATH: Record<string, EndpointApi> = {
+  "/v1/chat/completions": "chat",
+  "/v1/messages": "messages",
+  "/v1/responses": "responses",
+};
+
+function listedApi(row: Raw): EndpointApi | undefined {
+  if (!Array.isArray(row.native_endpoints) || row.native_endpoints.length === 0) return undefined;
+  const apis = new Set<EndpointApi>();
+  for (const value of row.native_endpoints) {
+    if (typeof value !== "string") return undefined;
+    const path = value.endsWith("/") ? value.slice(0, -1) : value;
+    const api = Object.hasOwn(API_BY_PATH, path) ? API_BY_PATH[path] : undefined;
+    if (!api) return undefined;
+    apis.add(api);
+  }
+  return apis.size === 1 ? [...apis][0] : undefined;
 }
 
 function pricesPerMillion(pricing: Raw) {
@@ -107,10 +145,12 @@ export function parseEndpointModels(body: unknown, options: { fileIsPdf?: boolea
     if (!id || !MODEL_ID.test(id) || seen.has(id)) continue;
     seen.add(id);
     const name = r.display_name;
+    const api = listedApi(r);
     const caps = listedCapabilities(r, options.fileIsPdf === true);
     out.push({
       id,
       ...(typeof name === "string" && name.trim() && name.length <= 120 ? { label: name.trim() } : {}),
+      ...(api ? { api } : {}),
       ...(caps ? { caps } : {}),
     });
     if (out.length >= MAX_LISTED) break;
@@ -146,15 +186,17 @@ export async function listEndpointModels(
   endpoint: Endpoint,
   apiKey: string,
   http: typeof fetch,
+  signal: AbortSignal = AbortSignal.timeout(LIST_TIMEOUT_MS),
 ): Promise<ListedEndpointModel[]> {
-  const url = endpoint.style === "anthropic" ? `${endpoint.baseURL}/v1/models` : `${endpoint.baseURL}/models`;
+  const baseURL = normalizeEndpointBase(endpoint.baseURL, endpoint.style);
+  const url = endpoint.style === "anthropic" ? `${baseURL.replace(/\/v1$/, "")}/v1/models` : `${baseURL}/models`;
   const headers: Record<string, string> =
     endpoint.style === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01", accept: "application/json" }
       : { authorization: `Bearer ${apiKey}`, accept: "application/json" };
   let res: Response;
   try {
-    res = await http(url, { headers, signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
+    res = await http(url, { headers, signal });
   } catch (error) {
     throw new ProviderError(`could not reach provider: ${(error as Error).message}`, true);
   }
@@ -234,7 +276,7 @@ export function endpointHeaders(baseURL: string, session: string, version = "dev
  * asks for one gets (`endpointHeaders`).
  */
 export function createCustomProvider(
-  options: { fetch?: typeof fetch; maxRetries?: number; version?: string } = {},
+  options: { fetch?: typeof fetch; maxRetries?: number; version?: string; progressNotes?: boolean } = {},
 ): ModelProvider {
   const bounded = boundedFetch(options.fetch);
   return {
@@ -243,27 +285,49 @@ export function createCustomProvider(
       const { endpoint } = streamOptions;
       const parsed = parseCustomModel(request.model);
       if (!endpoint || !parsed) throw new ProviderError("this model has no endpoint", false);
-      const extra = endpointHeaders(endpoint.baseURL, streamOptions.session ?? crypto.randomUUID(), options.version);
+      const baseURL = normalizeEndpointBase(endpoint.baseURL, endpoint.style);
+      const extra = endpointHeaders(baseURL, streamOptions.session ?? crypto.randomUUID(), options.version);
       const http = extra ? withHeaders(bounded, extra) : bounded;
+      const api: EndpointApi = endpoint.api ?? (endpoint.style === "anthropic" ? "messages" : "chat");
+      const requestForApi =
+        api === "responses"
+          ? { ...request, messages: withoutImages(request.messages, request.model, endpoint.reads) }
+          : request;
       const inner =
-        endpoint.style === "anthropic"
+        api === "messages"
           ? createAnthropicProvider({
               id: "custom",
-              baseURL: endpoint.baseURL,
+              baseURL: baseURL.replace(/\/v1$/, ""),
+              customScope: `custom:${parsed.credentialId}:${api}`,
               compat: { toolChoiceAny: false },
               fetch: http,
               maxRetries: options.maxRetries,
+              progressNotes: options.progressNotes,
             })
-          : createOpenRouterProvider({
-              compatible: { id: "custom", baseURL: endpoint.baseURL },
-              fetch: http,
-              maxRetries: options.maxRetries,
-            });
+          : api === "responses"
+            ? createOpenAIProvider({
+                baseURL,
+                customScope: `custom:${parsed.credentialId}:${api}`,
+                fetch: http,
+                maxRetries: options.maxRetries,
+                progressNotes: options.progressNotes,
+              })
+            : createOpenRouterProvider({
+                compatible: { id: "custom", baseURL, scope: `custom:${parsed.credentialId}:${api}` },
+                fetch: http,
+                maxRetries: options.maxRetries,
+              });
       const { costNanoUsd: _reported, ...result } = await inner.stream(
-        { ...request, model: parsed.model },
+        { ...requestForApi, model: parsed.model },
         { ...streamOptions, endpoint: { ...endpoint, reads: endpoint.reads } },
       );
-      return { ...result, model: request.model };
+      return {
+        ...result,
+        model: request.model,
+        ...(api === "responses" && hasToolImages(request.messages, lostWithoutImages(endpoint.reads))
+          ? { imagesLeftOut: true as const }
+          : {}),
+      };
     },
     /**
      * Pictures from an endpoint that speaks OpenAI's Images API (`/images/generations`, `/images/edits`, ADR 0197):

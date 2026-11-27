@@ -3,11 +3,15 @@ import { OutboundAddressError } from "@agenteschat/adapters";
 import { and, type Database, type Executor, eq, isNull, schema } from "@agenteschat/db";
 import {
   customModelId,
+  ENDPOINT_APIS,
   ENDPOINT_STYLES,
+  type EndpointApi,
   type EndpointStyle,
   listEndpointModels,
   type ModelInfo,
+  mergeEndpointApiRefresh,
   mergeEndpointDiscovery,
+  normalizeEndpointBase,
   normalizeEndpointDiscovery,
   ProviderError,
   parseCustomModel,
@@ -87,18 +91,13 @@ export async function validatedEndpointUrl(raw: string, net: EndpointNet): Promi
 }
 
 /**
- * An endpoint's address as its API's SDK takes it: no query, no trailing slash, and the path the SDK adds left out
- * (`/chat/completions`; `/v1` or `/v1/messages` for Anthropic's). The same checks as `validatedEndpointUrl` run first;
- * each call is checked again when it connects.
+ * An endpoint's address without a query, trailing slash, or known method suffix. A trailing `/v1` is retained and
+ * removed by the Messages adapter when it calls the endpoint. Each call is checked again when it connects.
  */
 export async function endpointAddress(raw: string, style: EndpointStyle, net: EndpointNet): Promise<string> {
   if (!ENDPOINT_STYLES.includes(style)) throw new ValidationError("Pick the API the server speaks", "endpoint.style");
   const address = await validatedEndpointUrl(raw, net);
-  const url = new URL(address);
-  const path = url.pathname.replace(/\/+$/, "");
-  const base =
-    style === "anthropic" ? path.replace(/\/v1(\/messages)?$/, "") : path.replace(/\/chat\/completions$/, "");
-  return `${url.origin}${base}`;
+  return normalizeEndpointBase(address, style);
 }
 
 type EndpointPrices = NonNullable<EndpointModel["prices"]>;
@@ -114,8 +113,22 @@ function validateEndpointLimits({ contextWindow, maxOutputTokens }: EndpointOver
     throw new ValidationError("Token limits must be positive integers", "endpoint.limits");
 }
 
+function validateEndpointApi(api?: EndpointApi) {
+  if (api !== undefined && !ENDPOINT_APIS.includes(api))
+    throw new ValidationError("Pick a supported API for the model", "endpoint.api");
+}
+
 /** Validates the selected models and carries forward metadata omitted by older clients. */
-export function cleanEndpointModels(models: EndpointModel[], previous: EndpointModel[] = []): EndpointModel[] {
+const effectiveApi = (model: EndpointModel, style: EndpointStyle): EndpointApi =>
+  model.overrides?.api ??
+  normalizeEndpointDiscovery(model.discovered)?.api?.value ??
+  (style === "anthropic" ? "messages" : "chat");
+
+export function cleanEndpointModels(
+  models: EndpointModel[],
+  previous: EndpointModel[] = [],
+  style: EndpointStyle = "openai",
+): EndpointModel[] {
   if (models.length === 0) throw new ValidationError("Choose at least one model", "endpoint.no_models");
   if (models.length > MAX_ENDPOINT_MODELS)
     throw new ValidationError(`At most ${MAX_ENDPOINT_MODELS} models`, "endpoint.too_many_models");
@@ -128,17 +141,25 @@ export function cleanEndpointModels(models: EndpointModel[], previous: EndpointM
     const label = m.label?.trim().slice(0, 120);
     const before = previous.find((o) => o.id === id);
     const overrides = m.overrides ?? before?.overrides;
-    const discovered = mergeEndpointDiscovery(before?.discovered, m.discovered);
+    let discovered = mergeEndpointApiRefresh(before?.discovered, m.discovered, before?.apiCheckedAt, m.apiCheckedAt);
+    const apiChanged = before && effectiveApi(before, style) !== effectiveApi({ ...m, overrides, discovered }, style);
+    if (apiChanged && discovered) {
+      discovered = { ...discovered };
+      if (discovered.image?.source === "probe") delete discovered.image;
+      if (discovered.pdf?.source === "probe") delete discovered.pdf;
+    }
     validateEndpointPrices(m.prices);
     if (overrides) {
       validateEndpointLimits(overrides);
       validateEndpointPrices(overrides.prices);
+      validateEndpointApi(overrides.api);
     }
     if (discovered) {
       validateEndpointLimits({
         contextWindow: discovered.contextWindow?.value,
         maxOutputTokens: discovered.maxOutputTokens?.value,
       });
+      validateEndpointApi(discovered.api?.value);
       validateEndpointPrices(
         Object.fromEntries(
           (["input", "output", "cacheRead", "cacheWrite"] as const).flatMap((key) => {
@@ -155,6 +176,7 @@ export function cleanEndpointModels(models: EndpointModel[], previous: EndpointM
       overrides: _overrides,
       discovered: _discovered,
       check: _check,
+      apiCheckedAt: _apiCheckedAt,
       ...storedExtra
     } = before ?? { id };
     const {
@@ -164,6 +186,7 @@ export function cleanEndpointModels(models: EndpointModel[], previous: EndpointM
       overrides: _incomingOverrides,
       discovered: _incomingDiscovered,
       check: _incomingCheck,
+      apiCheckedAt: _incomingApiCheckedAt,
       ...incomingExtra
     } = m;
     return {
@@ -174,15 +197,21 @@ export function cleanEndpointModels(models: EndpointModel[], previous: EndpointM
       ...(m.prices ? { prices: m.prices } : {}),
       ...(overrides ? { overrides } : {}),
       ...(discovered ? { discovered } : {}),
-      ...(before?.check ? { check: before.check } : {}),
+      ...(!before?.apiCheckedAt || (m.apiCheckedAt && Date.parse(m.apiCheckedAt) > Date.parse(before.apiCheckedAt))
+        ? m.apiCheckedAt
+          ? { apiCheckedAt: m.apiCheckedAt }
+          : {}
+        : { apiCheckedAt: before.apiCheckedAt }),
+      ...(!apiChanged && before?.check ? { check: before.check } : {}),
     };
   });
 }
 
 /** An endpoint model as the gateway and the pickers read it: never a pick for routing, the judge or summaries. */
-const infoOf = (endpointName: string, m: EndpointModel): ModelInfo => {
+const infoOf = (endpointName: string, style: EndpointStyle, m: EndpointModel): ModelInfo => {
   const { overrides } = m;
   const discovered = normalizeEndpointDiscovery(m.discovered);
+  const api = overrides?.api ?? discovered?.api?.value ?? (style === "anthropic" ? "messages" : "chat");
   const contextWindow = overrides?.contextWindow ?? discovered?.contextWindow?.value;
   const maxOutputTokens = overrides?.maxOutputTokens ?? discovered?.maxOutputTokens?.value;
   const image = overrides?.image ?? discovered?.image?.value;
@@ -202,6 +231,7 @@ const infoOf = (endpointName: string, m: EndpointModel): ModelInfo => {
     provider: "custom",
     label: m.label ?? m.id,
     endpoint: endpointName,
+    api,
     prices: priced
       ? { input, output, cacheRead: cacheRead ?? input, cacheWrite: cacheWrite ?? input }
       : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -246,7 +276,9 @@ function registerEndpointModels(
     orgId,
     Object.fromEntries(
       rows.flatMap((r) =>
-        (r.options.endpoint?.models ?? []).map((m) => [customModelId(r.id, m.id), infoOf(r.label, m)] as const),
+        (r.options.endpoint?.models ?? []).map(
+          (m) => [customModelId(r.id, m.id), infoOf(r.label, r.options.endpoint?.style ?? "openai", m)] as const,
+        ),
       ),
     ),
   );
@@ -310,36 +342,55 @@ export async function listEndpoint(
   db: Database,
   actorId: string,
   orgId: string,
-  input: { style: EndpointStyle; baseURL: string; apiKey?: string },
+  input: { style?: EndpointStyle; listingStyle?: EndpointStyle; baseURL: string; apiKey?: string },
   net: EndpointNet,
-): Promise<{ baseURL: string; models: EndpointModel[]; error?: string }> {
+): Promise<{ baseURL: string; models: EndpointModel[]; listingStyle?: EndpointStyle; error?: string }> {
   await requirePermission(db, actorId, orgId, "manage_credentials");
-  const baseURL = await endpointAddress(input.baseURL, input.style, net);
+  let baseURL = await endpointAddress(input.baseURL, input.style ?? "openai", net);
   try {
-    const models = await listEndpointModels(
-      { style: input.style, baseURL },
-      input.apiKey?.trim() || ENDPOINT_NO_KEY,
-      endpointFetch(net),
-    );
+    let models: Awaited<ReturnType<typeof listEndpointModels>>;
+    let listingStyle = input.listingStyle ?? input.style ?? "openai";
+    const signal = AbortSignal.timeout(10_000);
+    try {
+      models = await listEndpointModels(
+        { style: listingStyle, baseURL },
+        input.apiKey?.trim() || ENDPOINT_NO_KEY,
+        endpointFetch(net),
+        signal,
+      );
+    } catch (error) {
+      if (!(error instanceof ProviderError) || (error.status !== 404 && error.status !== 405)) throw error;
+      listingStyle = listingStyle === "openai" ? "anthropic" : "openai";
+      baseURL = normalizeEndpointBase(baseURL, listingStyle);
+      models = await listEndpointModels(
+        { style: listingStyle, baseURL },
+        input.apiKey?.trim() || ENDPOINT_NO_KEY,
+        endpointFetch(net),
+        signal,
+      );
+    }
     const catalog = models.length ? await loadEndpointCatalog(net.fetch) : undefined;
     const discoveredAt = new Date().toISOString();
     const source = "endpoint" as const;
     return {
       baseURL,
+      listingStyle,
       models: models
         .map(
-          ({ caps, ...model }): EndpointModel =>
-            caps
+          ({ caps, api, ...model }): EndpointModel =>
+            caps || api
               ? {
                   ...model,
+                  apiCheckedAt: discoveredAt,
                   discovered: {
-                    ...(caps.limits?.contextWindow === undefined
+                    ...(api ? { api: { source, value: api, discoveredAt } } : {}),
+                    ...(caps?.limits?.contextWindow === undefined
                       ? {}
                       : { contextWindow: { source, value: caps.limits.contextWindow, discoveredAt } }),
-                    ...(caps.limits?.maxOutputTokens === undefined
+                    ...(caps?.limits?.maxOutputTokens === undefined
                       ? {}
                       : { maxOutputTokens: { source, value: caps.limits.maxOutputTokens, discoveredAt } }),
-                    ...(caps.prices
+                    ...(caps?.prices
                       ? {
                           prices: Object.fromEntries(
                             Object.entries(caps.prices)
@@ -348,11 +399,11 @@ export async function listEndpoint(
                           ),
                         }
                       : {}),
-                    ...(caps.image === undefined ? {} : { image: { source, value: caps.image, discoveredAt } }),
-                    ...(caps.pdf === undefined ? {} : { pdf: { source, value: caps.pdf, discoveredAt } }),
+                    ...(caps?.image === undefined ? {} : { image: { source, value: caps.image, discoveredAt } }),
+                    ...(caps?.pdf === undefined ? {} : { pdf: { source, value: caps.pdf, discoveredAt } }),
                   },
                 }
-              : model,
+              : { ...model, apiCheckedAt: discoveredAt },
         )
         .map((model) => (catalog ? enrichEndpointModel(model, baseURL, catalog) : model)),
     };
@@ -415,10 +466,11 @@ export async function checkEndpoint(
     const [latest] = await tx.select().from(schema.providerCredentials).where(where).for("update");
     const current = latest?.options.endpoint;
     if (!current || latest.secretCiphertext !== row.secretCiphertext) return;
-    const models = current.models.map((m) => ({
-      ...m,
-      check: results.find((r) => r.model === m.id)?.check ?? m.check,
-    }));
+    const models = current.models.map((m) => {
+      const prior = endpoint.models.find((item) => item.id === m.id);
+      if (!prior || effectiveApi(prior, endpoint.style) !== effectiveApi(m, current.style)) return m;
+      return { ...m, check: results.find((r) => r.model === m.id)?.check ?? m.check };
+    });
     await tx
       .update(schema.providerCredentials)
       .set({ options: { ...latest.options, endpoint: { ...current, models } } })
@@ -559,6 +611,8 @@ export async function probeEndpoint(
     const source = "probe" as const;
     const updated = current.models.map((model) => {
       const result = results.get(model.id);
+      const prior = endpoint.models.find((item) => item.id === model.id);
+      if (!prior || effectiveApi(prior, endpoint.style) !== effectiveApi(model, current.style)) return model;
       if (result?.image === undefined && result?.pdf === undefined) return model;
       const image =
         result.image !== undefined &&
@@ -593,6 +647,7 @@ export async function updateEndpointModels(
   orgId: string,
   credentialId: string,
   models: EndpointModel[],
+  listingStyle?: EndpointStyle,
 ) {
   await requirePermission(db, actorId, orgId, "manage_credentials");
   const where = and(
@@ -605,7 +660,11 @@ export async function updateEndpointModels(
     const [row] = await tx.select().from(schema.providerCredentials).where(where).for("update");
     const endpoint = row?.options.endpoint;
     if (!row || !endpoint) throw new NotFoundError("Credential not found");
-    const next = { ...endpoint, models: cleanEndpointModels(models, endpoint.models) };
+    const next = {
+      ...endpoint,
+      ...(listingStyle ? { listingStyle } : {}),
+      models: cleanEndpointModels(models, endpoint.models, endpoint.style),
+    };
     await tx
       .update(schema.providerCredentials)
       .set({ options: { ...row.options, endpoint: next } })

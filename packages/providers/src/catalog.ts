@@ -1,4 +1,4 @@
-import type { AttachmentReads, ModelRequest, ModelUsage } from "./types";
+import type { AttachmentReads, EndpointApi, ModelRequest, ModelUsage } from "./types";
 
 /**
  * Prices in nano-USD per token (1e-9 USD), i.e. USD per million tokens × 1000,
@@ -120,6 +120,8 @@ export interface ModelInfo {
   contextWindow?: number;
   /** Tool attachment formats this connection is known to read. */
   reads?: AttachmentReads;
+  /** The API a custom endpoint model uses (ADR 0146). */
+  api?: EndpointApi;
   /** The most output tokens one call may ask for; the gateway caps each call at it. */
   maxOutputTokens?: number;
   /**

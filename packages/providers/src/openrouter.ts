@@ -380,7 +380,7 @@ export function reasoningFor(
   return best ? { effort: best } : undefined;
 }
 
-function toMessages(request: ModelRequest, claude: boolean, reads: AttachmentReads): Message[] {
+function toMessages(request: ModelRequest, claude: boolean, reads: AttachmentReads, scope: string): Message[] {
   const blocks = typeof request.system === "string" ? [{ text: request.system, cache: true }] : request.system;
   const system = blocks
     .filter((b) => b.text.length > 0)
@@ -406,7 +406,7 @@ function toMessages(request: ModelRequest, claude: boolean, reads: AttachmentRea
       );
       // Its own reasoning goes back unchanged, as OpenRouter asks; another provider's can't be replayed here.
       const details = parts.flatMap((b) =>
-        b.type === "opaque" && b.provider === "openrouter" && Array.isArray(b.data.details) ? b.data.details : [],
+        b.type === "opaque" && b.provider === scope && Array.isArray(b.data.details) ? b.data.details : [],
       );
       out.push({
         role: "assistant",
@@ -485,7 +485,7 @@ function effortRefusal(error: unknown): { wanted: string; supported: string[] } 
 /** What each endpoint said it takes, per `${baseURL}|${model}`: learned once, so the refusal costs one turn, not every. */
 const effortSupport = new Map<string, readonly string[]>();
 
-function toBody(request: ModelRequest, compatible: boolean, reads: AttachmentReads) {
+function toBody(request: ModelRequest, compatible: boolean, reads: AttachmentReads, scope: string) {
   const claude = !compatible && isClaude(request.model);
   const reasoning = compatible ? undefined : reasoningFor(request.effort, modelInfo(request.model));
   // A workspace endpoint (#432): Chat Completions' own `reasoning_effort`, which OpenAI, vLLM, LiteLLM and most gateways
@@ -494,7 +494,7 @@ function toBody(request: ModelRequest, compatible: boolean, reads: AttachmentRea
     compatible && request.effort && request.effort !== "none" ? effortWithin(request.effort) : undefined;
   return {
     model: request.model,
-    messages: toMessages(request, claude, reads),
+    messages: toMessages(request, claude, reads, scope),
     max_tokens: request.maxTokens,
     stream: true as const,
     ...(request.tools && request.tools.length > 0
@@ -614,7 +614,7 @@ export function createOpenRouterProvider(
      * Another server's Chat Completions (a workspace's own endpoint, ADR 0146): sent to `baseURL` with no
      * OpenRouter attribution, routing, reasoning or cache markers, usage asked for, and its reported cost ignored.
      */
-    compatible?: { id: string; baseURL: string };
+    compatible?: { id: string; baseURL: string; scope?: string };
   } = {},
 ): ModelProvider {
   const compatible = options.compatible;
@@ -645,7 +645,12 @@ export function createOpenRouterProvider(
           fetch: options.fetch,
         });
         // An effort the endpoint refused before goes out already mapped, so only the first turn pays for learning it.
-        const body = toBody(request, compatible !== undefined, reads) as unknown as Record<string, unknown>;
+        const body = toBody(
+          request,
+          compatible !== undefined,
+          reads,
+          compatible?.scope ?? "openrouter",
+        ) as unknown as Record<string, unknown>;
         const supportKey = compatible ? `${compatible.baseURL}|${request.model}` : undefined;
         const support = supportKey ? effortSupport.get(supportKey) : undefined;
         const asked = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
@@ -708,7 +713,9 @@ export function createOpenRouterProvider(
         }
         if (!finish) throw new ProviderError("could not read the model's reply: the stream ended early", true);
         const content: ContentBlock[] = [
-          ...(details.length > 0 ? [{ type: "opaque" as const, provider: "openrouter", data: { details } }] : []),
+          ...(details.length > 0
+            ? [{ type: "opaque" as const, provider: compatible?.scope ?? "openrouter", data: { details } }]
+            : []),
           ...(text ? [{ type: "text" as const, text }] : []),
           ...calls.flatMap((c, i) => {
             if (!c) return [];

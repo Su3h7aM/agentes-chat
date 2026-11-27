@@ -1,4 +1,4 @@
-import type { Credential, EndpointCheck, EndpointStyle } from "@agenteschat/client";
+import type { Credential, EndpointCheck } from "@agenteschat/client";
 import { useAddCredential, useEndpointModels, useProbeEndpoint, useSetEndpointModels } from "@agenteschat/client";
 import {
   attachmentLabel,
@@ -8,11 +8,11 @@ import {
   checksInOrder,
   discoveredNumber,
   draftOfEndpoint,
+  ENDPOINT_API_LABELS,
   ENDPOINT_ATTACHMENTS,
   ENDPOINT_LIMITS,
   ENDPOINT_PRICES,
   ENDPOINT_SEARCH_FROM,
-  ENDPOINT_STYLES,
   type EndpointDraft,
   type EndpointModelDraft,
   editNumber,
@@ -28,6 +28,7 @@ import {
   parsePrice,
   pendingAttachments,
   withChecks,
+  withEndpointAddress,
   withListedModels,
   withoutModel,
   withTypedModel,
@@ -46,6 +47,7 @@ import {
   Locked,
   SearchField,
   Segmented,
+  Select,
   SettingNote,
   Spinner,
 } from "@agenteschat/ui";
@@ -126,12 +128,20 @@ export function EndpointForm({
     const input = credential
       ? { credentialId: credential.id }
       : {
-          style: draft.style,
           baseURL: draft.baseURL.trim(),
           apiKey: draft.apiKey.trim() || undefined,
         };
     list.mutate(input, {
-      onSuccess: (r) => setDraft((d) => ({ ...withListedModels(d, r.models), baseURL: r.baseURL })),
+      onSuccess: (r) =>
+        setDraft((d) =>
+          credential || d.baseURL.trim() === input.baseURL
+            ? {
+                ...withListedModels(d, r.models),
+                baseURL: r.baseURL,
+                listingStyle: r.listingStyle ?? d.listingStyle,
+              }
+            : d,
+        ),
     });
   };
   const showResults = (cred: Credential, checks: EndpointCheck[]) => {
@@ -145,13 +155,21 @@ export function EndpointForm({
     if (!models) return;
     if (editing && credential) {
       change.mutate(
-        { credentialId: credential.id, models },
+        { credentialId: credential.id, models, listingStyle: draft.listingStyle },
         {
           onSuccess: (r) =>
             showResults(
               {
                 ...credential,
-                ...(credential.endpoint ? { endpoint: { ...credential.endpoint, models: r.models } } : {}),
+                ...(credential.endpoint
+                  ? {
+                      endpoint: {
+                        ...credential.endpoint,
+                        ...(draft.listingStyle ? { listingStyle: draft.listingStyle } : {}),
+                        models: r.models,
+                      },
+                    }
+                  : {}),
               },
               r.checks,
             ),
@@ -166,6 +184,7 @@ export function EndpointForm({
         apiKey: draft.apiKey.trim(),
         endpoint: {
           style: draft.style,
+          ...(draft.listingStyle ? { listingStyle: draft.listingStyle } : {}),
           baseURL: draft.baseURL.trim(),
           models,
         },
@@ -268,14 +287,6 @@ export function EndpointForm({
                   onChange={(e) => set({ name: e.target.value })}
                 />
               </Field>
-              <Field label={t("endpoint.style")} group>
-                <Segmented<EndpointStyle>
-                  label={t("endpoint.style")}
-                  value={draft.style}
-                  onValueChange={(style) => set({ style })}
-                  options={ENDPOINT_STYLES.map((s) => ({ value: s, label: t(`endpoint.styles.${s}`) }))}
-                />
-              </Field>
               <Field
                 label={t("endpoint.address")}
                 id={`${ids}-url`}
@@ -287,7 +298,7 @@ export function EndpointForm({
                   autoComplete="off"
                   spellCheck={false}
                   placeholder={endpointBaseExample(draft.style)}
-                  onChange={(e) => set({ baseURL: e.target.value })}
+                  onChange={(e) => setDraft((d) => withEndpointAddress(d, e.target.value))}
                 />
               </Field>
               <Field
@@ -394,6 +405,25 @@ export function EndpointForm({
                     />
                     {m.on && (
                       <div className="endpoint-model__capabilities">
+                        <Field label={t("endpoint.capabilities.api")} id={`${ids}-${m.id}-api`}>
+                          <Select
+                            aria-label={`${m.id} · ${t("endpoint.capabilities.api")}`}
+                            value={m.manual?.api ?? "auto"}
+                            options={[
+                              {
+                                value: "auto",
+                                label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
+                              },
+                              ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({ value, label })),
+                            ]}
+                            onValueChange={(value) =>
+                              setManual(m, {
+                                ...m.manual,
+                                api: value === "auto" ? undefined : (value as keyof typeof ENDPOINT_API_LABELS),
+                              })
+                            }
+                          />
+                        </Field>
                         {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
                           const limit = index < ENDPOINT_LIMITS.length;
                           const manual = m.manual?.[field];

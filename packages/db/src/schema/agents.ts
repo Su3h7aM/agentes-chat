@@ -21,6 +21,7 @@ import { machineAccounts, machines } from "./machines";
 import { organizationMembers, organizations, orgRoles } from "./tenancy";
 
 type EndpointPrices = { input: number; output: number; cacheRead: number; cacheWrite: number };
+type EndpointApi = "chat" | "messages" | "responses";
 type DiscoverySource = "endpoint" | "probe" | "catalog";
 type EndpointDiscovery<T> = { source: DiscoverySource; value: T; discoveredAt: string };
 
@@ -33,6 +34,7 @@ export interface EndpointModelOverrides extends EndpointModelLimits {
   prices?: Partial<EndpointPrices>;
   image?: boolean;
   pdf?: boolean;
+  api?: EndpointApi;
 }
 
 export interface EndpointModelDiscovery {
@@ -41,11 +43,13 @@ export interface EndpointModelDiscovery {
   prices?: Partial<Record<keyof EndpointPrices, EndpointDiscovery<number>>>;
   image?: EndpointDiscovery<boolean>;
   pdf?: EndpointDiscovery<boolean>;
+  api?: EndpointDiscovery<EndpointApi>;
 }
 
 /** A workspace's own model endpoint as its credential keeps it (ADR 0146). Prices in nano-USD per token. */
 export interface StoredEndpoint {
   style: "openai" | "anthropic";
+  listingStyle?: "openai" | "anthropic";
   baseURL: string;
   models: {
     id: string;
@@ -54,6 +58,8 @@ export interface StoredEndpoint {
     prices?: EndpointPrices;
     overrides?: EndpointModelOverrides;
     discovered?: EndpointModelDiscovery;
+    /** When the endpoint last listed this model's API metadata, including an unknown result. */
+    apiCheckedAt?: string;
     /** The last test call: answered and called a tool, answered without calling it, or failed. */
     check?: "ok" | "no_tools" | "failed";
   }[];

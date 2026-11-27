@@ -72,7 +72,21 @@ describe("the address", () => {
       "https://gw.example/v1",
     );
     expect(await endpointAddress("https://gw.example/anthropic/v1/messages", "anthropic", cloud)).toBe(
-      "https://gw.example/anthropic",
+      "https://gw.example/anthropic/v1",
+    );
+    expect(await endpointAddress("https://gw.example/v1/responses", "openai", cloud)).toBe("https://gw.example/v1");
+    expect(await endpointAddress("https://gw.example/v1/models", "openai", cloud)).toBe("https://gw.example/v1");
+  });
+
+  test("API check timestamps compare instants across ISO formats", () => {
+    const old = [{ id: "m", apiCheckedAt: "2026-01-01T00:00:00Z" }];
+    expect(cleanEndpointModels([{ id: "m", apiCheckedAt: "2026-01-01T00:00:00.000Z" }], old)[0]?.apiCheckedAt).toBe(
+      "2026-01-01T00:00:00Z",
+    );
+    const newer = cleanEndpointModels([{ id: "m", apiCheckedAt: "2026-01-01T00:00:00.001Z" }], old);
+    expect(newer[0]?.apiCheckedAt).toBe("2026-01-01T00:00:00.001Z");
+    expect(cleanEndpointModels([{ id: "m", apiCheckedAt: "2026-01-01T00:00:00Z" }], newer)[0]?.apiCheckedAt).toBe(
+      "2026-01-01T00:00:00.001Z",
     );
   });
 
@@ -146,6 +160,133 @@ describe("the credential", () => {
       prices: { input: 1000, output: 2000 },
     });
   });
+  test("persists per-model API discovery and respects manual override and legacy fallback", async () => {
+    f = await setup();
+    const discovered = {
+      api: { source: "endpoint" as const, value: "responses" as const, discoveredAt: "2026-11-25T00:00:00.000Z" },
+    };
+    const cred = await addEndpoint(f, [{ id: "m", discovered, overrides: { api: "messages" } }, { id: "unknown" }]);
+    const info = () => modelInfoFor(f.db, customModelId(cred.id, "m"), f.org.id);
+    expect((await info())?.api).toBe("messages");
+    expect((await modelInfoFor(f.db, customModelId(cred.id, "unknown"), f.org.id))?.api).toBe("chat");
+    await updateEndpointModels(f.db, f.owner.id, f.org.id, cred.id, [{ id: "m", overrides: {} }]);
+    expect((await info())?.api).toBe("responses");
+    expect(
+      (await listCredentials(f.db, f.owner.id, f.org.id)).find((row) => row.id === cred.id)?.endpoint?.models[0]
+        ?.discovered,
+    ).toEqual(discovered);
+  });
+
+  test("a fresh model listing clears stale API evidence while retaining manual overrides on update and resave", async () => {
+    f = await setup();
+    const old = {
+      api: { source: "endpoint" as const, value: "responses" as const, discoveredAt: "2026-01-01T00:00:00.000Z" },
+    };
+    const cred = await addEndpoint(f, [{ id: "m", discovered: old, overrides: { api: "messages" } }]);
+    const fetcher = (async () =>
+      Response.json({
+        data: [{ id: "m", native_endpoints: ["/v1/messages", "/v1/responses"] }],
+      })) as unknown as typeof fetch;
+    const listed = await listEndpoint(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { baseURL: "https://gw.example/v1" },
+      { ...cloud, fetch: fetcher },
+    );
+    const fresh = listed.models.find((m) => m.id === "m");
+    if (!fresh) throw new Error("missing model");
+    await updateEndpointModels(f.db, f.owner.id, f.org.id, cred.id, [fresh]);
+    let model = (await listCredentials(f.db, f.owner.id, f.org.id)).find((c) => c.id === cred.id)?.endpoint?.models[0];
+    expect(model?.discovered?.api).toBeUndefined();
+    expect(model?.overrides?.api).toBe("messages");
+    const saved = await createCredential(
+      f.db,
+      f.keyWrapper,
+      f.owner.id,
+      f.org.id,
+      {
+        provider: "custom",
+        label: "OpenGateway",
+        apiKey: "gw-key-1234567",
+        endpoint: { style: "openai", baseURL: "https://gw.example/v1", models: [fresh] },
+      },
+      { net: cloud },
+    );
+    model = saved.endpoint?.models[0];
+    expect(saved.reused).toBe(true);
+    expect(model?.discovered?.api).toBeUndefined();
+    expect(model?.overrides?.api).toBe("messages");
+  });
+
+  test("automatic list fallback occurs only on 404 or 405", async () => {
+    f = await setup();
+    for (const status of [404, 405, 401, 200]) {
+      const calls: { url: string; headers: Headers; signal: AbortSignal | null | undefined }[] = [];
+      const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), headers: new Headers(init?.headers), signal: init?.signal });
+        if (calls.length === 1) return new Response(status === 200 ? '{"data":[]}' : "", { status });
+        return new Response(JSON.stringify({ data: [{ id: "m", native_endpoints: ["/v1/messages"] }] }));
+      }) as typeof fetch;
+      const result = await listEndpoint(
+        f.db,
+        f.owner.id,
+        f.org.id,
+        { baseURL: "https://gw.example/v1" },
+        { ...cloud, fetch: fetcher },
+      );
+      if (status === 404 || status === 405) {
+        expect(calls.slice(0, 2).map((call) => call.url)).toEqual([
+          "https://gw.example/v1/models",
+          "https://gw.example/v1/models",
+        ]);
+        expect(calls[0]?.headers.get("authorization")).toBe("Bearer none");
+        expect(calls[1]?.headers.get("x-api-key")).toBe("none");
+        expect(calls[0]?.signal).toBe(calls[1]?.signal);
+        expect(result.listingStyle).toBe("anthropic");
+        expect(result.models[0]?.discovered?.api).toMatchObject({ value: "messages", source: "endpoint" });
+      } else expect(calls).toHaveLength(1);
+    }
+  });
+
+  test("saved legacy address normalizes before using its separate listing authentication", async () => {
+    f = await setup();
+    const calls: { url: string; headers: Headers }[] = [];
+    const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
+      return Response.json({ data: [] });
+    }) as typeof fetch;
+    const result = await listEndpoint(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { style: "anthropic", listingStyle: "openai", baseURL: "https://gw.example", apiKey: "key" },
+      { ...cloud, fetch: fetcher },
+    );
+    expect(calls[0]?.url).toBe("https://gw.example/v1/models");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer key");
+    expect(result.baseURL).toBe("https://gw.example/v1");
+  });
+
+  test("fallback to Messages returns the base used for its successful list", async () => {
+    f = await setup();
+    const urls: string[] = [];
+    const fetcher = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return urls.length === 1 ? new Response("", { status: 404 }) : Response.json({ data: [] });
+    }) as typeof fetch;
+    const result = await listEndpoint(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { baseURL: "https://gw.example" },
+      { ...cloud, fetch: fetcher },
+    );
+    expect(urls).toEqual(["https://gw.example/models", "https://gw.example/v1/models"]);
+    expect(result.baseURL).toBe("https://gw.example/v1");
+    expect(result.listingStyle).toBe("anthropic");
+  });
+
   test("admins only; the endpoint is required, its models checked, the key sealed and never shown", async () => {
     f = await setup();
     const member = await addMember(f.db, f.org.id, "member");
@@ -213,7 +354,14 @@ describe("the credential", () => {
         { style: "openai", baseURL: "https://gw.example/v1", apiKey: "k" },
         { ...cloud, fetch: ok },
       ),
-    ).toEqual({ baseURL: "https://gw.example/v1", models: [{ id: "a" }, { id: "b" }] });
+    ).toEqual({
+      baseURL: "https://gw.example/v1",
+      listingStyle: "openai",
+      models: [
+        { id: "a", apiCheckedAt: expect.any(String) },
+        { id: "b", apiCheckedAt: expect.any(String) },
+      ],
+    });
     const down = (async () => new Response("no", { status: 404 })) as unknown as typeof fetch;
     const r = await listEndpoint(
       f.db,
@@ -292,7 +440,12 @@ describe("calls", () => {
       onDelta() {},
     });
     expect(f.provider.calls.at(-1)?.request.model).toBe(agent.model);
-    expect(f.provider.calls.at(-1)?.endpoint).toEqual({ style: "openai", baseURL: "https://gw.example/v1" });
+    expect(f.provider.calls.at(-1)?.endpoint).toEqual({
+      style: "openai",
+      baseURL: "https://gw.example/v1",
+      api: "chat",
+      reads: undefined,
+    });
   });
 
   test("an agent on an endpoint model: its key and address, the admin's prices, tokens and cost recorded", async () => {
@@ -310,7 +463,12 @@ describe("calls", () => {
     });
     const sent = f.provider.calls.at(-1);
     expect(sent?.apiKey).toBe("gw-key-1234567");
-    expect(sent?.endpoint).toEqual({ style: "openai", baseURL: "https://gw.example/v1" });
+    expect(sent?.endpoint).toEqual({
+      style: "openai",
+      baseURL: "https://gw.example/v1",
+      api: "chat",
+      reads: undefined,
+    });
     expect(result.costNanoUsd).toBe(1000 * 1000 + 100 * 2000);
     const [record] = await f.db.select().from(schema.usageRecords).where(eq(schema.usageRecords.agentId, f.agent.id));
     expect(record).toMatchObject({ provider: "custom", model, credentialId: cred.id, orgId: f.org.id });
@@ -599,6 +757,81 @@ test("resaving merges discovery added after duplicate lookup", async () => {
   );
   expect(saved.reused).toBe(true);
   expect(saved.endpoint?.models[0]?.discovered?.image?.value).toBe(true);
+});
+
+test("resaving a legacy Messages endpoint retains model evidence and its protocol", async () => {
+  f = await setup();
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const input = {
+    provider: "custom" as const,
+    label: "gateway",
+    apiKey: "key",
+    endpoint: {
+      style: "anthropic" as const,
+      baseURL: "https://gw.example/v1",
+      models: [
+        {
+          id: "m",
+          overrides: { image: false },
+          discovered: { pdf: { source: "probe" as const, value: true, discoveredAt } },
+        },
+      ],
+    },
+  };
+  const saved = await createCredential(f.db, f.keyWrapper, f.owner.id, f.org.id, input, { net: cloud });
+  const [row] = await f.db.select().from(schema.providerCredentials).where(eq(schema.providerCredentials.id, saved.id));
+  if (!row?.options.endpoint) throw new Error("missing endpoint");
+  await f.db
+    .update(schema.providerCredentials)
+    .set({
+      options: {
+        ...row.options,
+        endpoint: {
+          ...row.options.endpoint,
+          baseURL: "https://gw.example",
+          models: row.options.endpoint.models.map((model) => ({ ...model, check: "ok" as const })),
+        },
+      },
+    })
+    .where(eq(schema.providerCredentials.id, saved.id));
+  const again = await createCredential(
+    f.db,
+    f.keyWrapper,
+    f.owner.id,
+    f.org.id,
+    {
+      ...input,
+      endpoint: { style: "openai", listingStyle: "openai", baseURL: input.endpoint.baseURL, models: [{ id: "m" }] },
+    },
+    { net: cloud },
+  );
+  expect(again.reused).toBe(true);
+  expect(again.id).toBe(saved.id);
+  expect(again.endpoint?.style).toBe("anthropic");
+  expect(again.endpoint?.listingStyle).toBe("openai");
+  expect(again.endpoint?.models[0]?.overrides?.image).toBe(false);
+  expect(again.endpoint?.models[0]?.discovered?.pdf?.value).toBe(true);
+  expect(again.endpoint?.models[0]?.check).toBe("ok");
+  expect((await modelInfoFor(f.db, customModelId(saved.id, "m"), f.org.id))?.api).toBe("messages");
+});
+
+test("changing a model API clears its check and probe evidence", async () => {
+  f = await setup();
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const before = [
+    {
+      id: "m",
+      check: "ok" as const,
+      discovered: {
+        image: { source: "probe" as const, value: true, discoveredAt },
+        pdf: { source: "endpoint" as const, value: true, discoveredAt },
+      },
+    },
+  ];
+  const [model] = cleanEndpointModels([{ id: "m", overrides: { api: "responses" } }], before);
+  expect(model?.check).toBeUndefined();
+  expect(model?.discovered?.image).toBeUndefined();
+  expect(model?.discovered?.pdf).toEqual(before[0]?.discovered.pdf);
 });
 
 test("omitted client discovery preserves all stored fields", async () => {

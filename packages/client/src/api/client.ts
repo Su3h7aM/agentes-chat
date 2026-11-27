@@ -938,13 +938,13 @@ export interface ApiClient {
         organizationId?: string | null;
         projectId?: string | null;
         /** `custom` only: the endpoint's address, API and models (ADR 0146). */
-        endpoint?: { style: EndpointStyle; baseURL: string; models: EndpointModel[] };
+        endpoint?: { style: EndpointStyle; listingStyle?: EndpointStyle; baseURL: string; models: EndpointModel[] };
       },
     ): Promise<Credential & { checks?: EndpointCheck[] }>;
     /** List models and capabilities using new connection details or the saved credential. */
     endpointModels(
       orgId: string,
-      input: { credentialId: string } | { style: EndpointStyle; baseURL: string; apiKey?: string },
+      input: { credentialId: string } | { style?: EndpointStyle; baseURL: string; apiKey?: string },
     ): Promise<EndpointModelList>;
     probeEndpoint(orgId: string, credentialId: string, input: EndpointProbe): Promise<{ models: EndpointModel[] }>;
     /** Changes an endpoint's models and prices, then tests each again. */
@@ -952,6 +952,7 @@ export interface ApiClient {
       orgId: string,
       credentialId: string,
       models: EndpointModel[],
+      listingStyle?: EndpointStyle,
     ): Promise<{ models: EndpointModel[]; checks: EndpointCheck[] }>;
     /** Replaces the key, keeping the id (agents keep using it). */
     rotateCredential(

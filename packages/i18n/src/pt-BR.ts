@@ -10885,6 +10885,8 @@ export const ptBR = {
     manageModels: "Gerenciar modelos",
     capabilities: {
       automatic: "Automático",
+      api: "API do modelo",
+      apiFallback: "{{api}} como alternativa",
       contextWindow: "Janela de contexto (tokens)",
       maxOutputTokens: "Saída máxima (tokens)",
       cacheRead: "Leitura do cache",

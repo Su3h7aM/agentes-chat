@@ -972,6 +972,7 @@ export interface Credential {
   /** `custom` (ADR 0146): the endpoint's address, API and models. */
   endpoint?: {
     style: EndpointStyle;
+    listingStyle?: EndpointStyle;
     baseURL: string;
     models: EndpointModel[];
   };
@@ -1012,10 +1013,12 @@ export interface EndpointOverrides extends EndpointLimits {
   prices?: Partial<EndpointPrices>;
   image?: boolean;
   pdf?: boolean;
+  api?: EndpointApi;
 }
 
 type EndpointDiscovery<T> = { value: T; source: "endpoint" | "catalog" | "probe"; discoveredAt: string };
 export type EndpointAttachment = "image" | "pdf";
+export type EndpointApi = "chat" | "messages" | "responses";
 
 export interface EndpointDiscovered {
   contextWindow?: EndpointDiscovery<number>;
@@ -1023,6 +1026,7 @@ export interface EndpointDiscovered {
   prices?: Partial<Record<keyof EndpointPrices, EndpointDiscovery<number>>>;
   image?: EndpointDiscovery<boolean>;
   pdf?: EndpointDiscovery<boolean>;
+  api?: EndpointDiscovery<EndpointApi>;
 }
 
 export interface EndpointModel {
@@ -1032,12 +1036,14 @@ export interface EndpointModel {
   prices?: EndpointPrices;
   overrides?: EndpointOverrides;
   discovered?: EndpointDiscovered;
+  apiCheckedAt?: string;
   check?: EndpointCheckResult;
 }
 
 export interface EndpointModelList {
   baseURL: string;
-  models: Pick<EndpointModel, "id" | "label" | "discovered">[];
+  listingStyle?: EndpointStyle;
+  models: Pick<EndpointModel, "id" | "label" | "discovered" | "apiCheckedAt">[];
   error?: string;
 }
 
