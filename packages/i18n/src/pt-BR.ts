@@ -10883,6 +10883,13 @@ export const ptBR = {
     priceIn: "{{model}}: preço de entrada",
     priceOut: "{{model}}: preço de saída",
     manageModels: "Gerenciar modelos",
+    modelInvalidValues: "Revise os valores inválidos",
+    modelMissingPrice: "Falta preço",
+    modelLimits: "Limites",
+    modelPrices: "Preços",
+    modelAttachments: "Anexos",
+    selectModel: "Selecionar {{model}}",
+    deselectModel: "Desmarcar {{model}}",
     capabilities: {
       automatic: "Automático",
       api: "API do modelo",

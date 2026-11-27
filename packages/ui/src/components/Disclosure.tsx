@@ -11,19 +11,26 @@ export function Disclosure({
   summary,
   children,
   defaultOpen = false,
+  open,
   onOpenChange,
   className,
+  name,
+  variant = "default",
 }: {
   summary: ReactNode;
   children: ReactNode;
   defaultOpen?: boolean;
+  open?: boolean;
   onOpenChange?: (open: boolean) => void;
   className?: string;
+  name?: string;
+  variant?: "default" | "row";
 }) {
   return (
     <details
-      className={cx("ac-disclosure", className)}
-      open={defaultOpen || undefined}
+      className={cx("ac-disclosure", variant === "row" && "ac-disclosure--row", className)}
+      name={name}
+      open={open ?? (defaultOpen || undefined)}
       onToggle={(e) => onOpenChange?.(e.currentTarget.open)}
     >
       <summary className="ac-disclosure__summary">

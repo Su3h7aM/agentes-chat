@@ -10927,6 +10927,13 @@ export const en = {
     priceIn: "{{model}}: input price",
     priceOut: "{{model}}: output price",
     manageModels: "Manage models",
+    modelInvalidValues: "Check invalid values",
+    modelMissingPrice: "Missing price",
+    modelLimits: "Limits",
+    modelPrices: "Prices",
+    modelAttachments: "Attachments",
+    selectModel: "Select {{model}}",
+    deselectModel: "Deselect {{model}}",
     capabilities: {
       automatic: "Automatic",
       api: "Model API",

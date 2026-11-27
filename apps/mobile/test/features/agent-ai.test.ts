@@ -1407,7 +1407,7 @@ describe("Connect an AI's steps line", () => {
 });
 
 describe("Outro provedor on the phone", () => {
-  test("per-model API rows, Buscar modelos on the add line header, + in the field, × per model", async () => {
+  test("per-model API rows, Buscar modelos on the list's header, + in the field under the list, Remover only for typed ids", async () => {
     // The screen is a component the tests can't render: what it wires in, as text.
     const form = await Bun.file(new URL("../../src/features/ai/EndpointForm.tsx", import.meta.url).pathname).text();
     expect(form).not.toContain('t("endpoint.style")');
@@ -1417,10 +1417,23 @@ describe("Outro provedor on the phone", () => {
     expect(form).toContain('api: value === "auto" ? undefined : value');
     expect(form).toContain("withEndpointAddress(d, baseURL)");
     expect(form).toMatch(
-      /<GroupedHeader\s+aside=\{\s*<Button\s+variant="text"\s+size="sm"\s+label=\{t\("endpoint\.fetch"\)\}/,
+      /<GroupedHeader\s+aside=\{\s*<Button\s+variant="text"\s+size="sm"\s+label=\{t\("endpoint\.fetch"\)\}[\s\S]*?>\s*\{t\("endpoint\.choose"\)\}\s*<\/GroupedHeader>/,
     );
     expect(form).toContain('<IconButton icon="plus" label={t("endpoint.add")}');
-    expect(form).toContain("withoutModel(d, m.id)");
+    // Typing an id is the fallback: the list comes first, then the field.
+    expect(form.indexOf("shown.map((m) =>")).toBeLessThan(form.indexOf('{t("endpoint.addModel")}'));
+    expect(form.indexOf('{t("endpoint.addModel")}')).toBeLessThan(form.indexOf("onSubmitEditing={addTyped}"));
+    // No remove on the collapsed row. A model typed by hand goes from inside its open panel, the provider's never.
+    expect(form).not.toContain("remove={{");
+    expect(form).toMatch(
+      /\{m\.typed \? \(\s*<GroupedList>\s*<GroupedRow\s+icon="x"\s+label=\{t\("common\.removeName", \{ name: m\.id \}\)\}[\s\S]*?danger[\s\S]*?withoutModel\(d, m\.id\)/,
+    );
+    expect(form.indexOf("{openModel === m.id ? (")).toBeLessThan(form.indexOf("{m.typed ? ("));
+    expect(form).toContain("useState<string | null>(null)");
+    expect(form).toContain("openModel === m.id ?");
+    expect(form).toContain("open === m.id ? null : m.id");
+    expect(form).toContain("expanded={openModel === m.id}");
+    expect(form).toContain("sub={modelSummary(m, t)}");
   });
 });
 

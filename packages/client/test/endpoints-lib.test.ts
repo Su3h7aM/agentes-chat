@@ -7,6 +7,7 @@ import {
   endpointAddressLooksValid,
   endpointModelsOf,
   endpointReady,
+  modelSummary,
   modelsShown,
   modelUnpriced,
   parsePrice,
@@ -20,6 +21,15 @@ import {
 import { keyRuns, modelChoices, modelOnKey } from "../src/lib/providers";
 
 describe("the endpoint form", () => {
+  test("collapsed status identifies invalid values and missing prices without claiming a fallback", () => {
+    const t = (key: string) => key;
+    expect(modelSummary({ id: "a", on: true, manual: { input: "bad" } }, t)).toBe(
+      "endpoint.modelInvalidValues · endpoint.modelMissingPrice",
+    );
+    expect(modelSummary({ id: "a", on: true }, t)).toBe("endpoint.modelMissingPrice");
+    expect(modelSummary({ id: "a", on: false }, t)).toBe("endpoint.capabilities.automatic");
+    expect(modelSummary({ id: "a", on: false, manual: { api: "responses" } }, t)).toBe("OpenAI Responses");
+  });
   test("editing a saved endpoint preserves its manual API", () => {
     const draft = draftOfEndpoint("gateway", {
       style: "openai",
@@ -106,10 +116,38 @@ describe("the endpoint form", () => {
     expect(withChecks(bare, [{ model: "b", check: "ok" }])).toEqual({ id: "k" });
   });
 
-  test("a model taken off leaves the others as they were", () => {
-    const d = withListedModels(emptyEndpointDraft(), [{ id: "a" }, { id: "b" }]);
-    expect(withoutModel(d, "a").models.map((m) => m.id)).toEqual(["b"]);
-    expect(d.models).toHaveLength(2);
+  test("only a model typed by hand comes off, leaving the others as they were; the provider's stay listed", () => {
+    const listed = withListedModels(emptyEndpointDraft(), [{ id: "a" }, { id: "b" }]);
+    const d = withTypedModel(withTypedModel(listed, "c") ?? listed, "d") ?? listed;
+    expect(d.models.map((m) => [m.id, m.typed === true])).toEqual([
+      ["a", false],
+      ["b", false],
+      ["c", true],
+      ["d", true],
+    ]);
+    expect(withoutModel(d, "c").models.map((m) => [m.id, m.on])).toEqual([
+      ["a", false],
+      ["b", false],
+      ["d", true],
+    ]);
+    expect(withoutModel(d, "a")).toEqual(d);
+    expect(d.models).toHaveLength(4);
+  });
+
+  test("a typed id the provider lists becomes the provider's, ticked as it was; a saved model is nobody's to remove", () => {
+    let d = withTypedModel(emptyEndpointDraft(), "m") ?? emptyEndpointDraft();
+    expect(d.models[0]).toEqual({ id: "m", on: true, typed: true });
+    // Typing a listed id ticks it and leaves it the provider's.
+    expect(withTypedModel(withListedModels(emptyEndpointDraft(), [{ id: "x" }]), "x")?.models).toEqual([
+      { id: "x", on: true },
+    ]);
+    d = withListedModels(d, [{ id: "m", label: "M" }]);
+    expect(d.models).toEqual([{ id: "m", label: "M", on: true }]);
+    expect(withoutModel(d, "m").models).toHaveLength(1);
+    const saved = draftOfEndpoint("GW", { style: "openai", baseURL: "https://gw.example/v1", models: [{ id: "s" }] });
+    expect(saved.models[0]?.typed).toBeUndefined();
+    // What the form saves never carries where a model came from.
+    expect(endpointModelsOf(withTypedModel(saved, "t") ?? saved)?.some((m) => "typed" in m)).toBe(false);
   });
 
   test("listed models start off, typed ones on; a typed id that isn't one is refused", () => {

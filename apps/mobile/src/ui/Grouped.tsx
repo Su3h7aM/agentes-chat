@@ -232,6 +232,8 @@ export interface GroupedRowProps {
   menu?: boolean;
   /** A chevron: it opens a screen. */
   chevron?: boolean;
+  /** The row expands content in place. */
+  expanded?: boolean;
   /**
    * A row of a split's list (ADR 0212: two panes on a regular-width window), whose page opens beside the list instead
    * of over it: lit while that page shows (true), plain otherwise (false), and never a chevron or the held light of a
@@ -315,6 +317,7 @@ function Row({
   valueNote,
   valueLeading,
   chevron: opensScreen = false,
+  expanded,
   selected,
   menu = false,
   more = false,
@@ -555,6 +558,7 @@ function Row({
         : {})}
       accessibilityState={{
         disabled,
+        ...(expanded !== undefined ? { expanded } : {}),
         ...(toggle !== undefined ? { checked: toggle } : {}),
         ...(checked !== undefined ? { selected: checked } : selected !== undefined ? { selected } : {}),
       }}

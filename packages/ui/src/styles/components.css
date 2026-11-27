@@ -6588,6 +6588,11 @@ html:not([data-pointer]) .ac-seg__item:focus-visible {
   margin-inline: -1px -23px;
 }
 .ac-field > .ac-hintline,
+/* An action beside a label (Buscar modelos, Redefinir) is a few words that never break: the label wraps first. */
+.ac-field__label-row > .ac-link {
+  flex: none;
+  white-space: nowrap;
+}
 .ac-field__label-row > .ac-hintline {
   font-size: 13px;
   line-height: 18px;
@@ -13667,6 +13672,12 @@ html:not([data-pointer]) .ac-foldrow__head:focus-visible {
   list-style: none;
   cursor: pointer;
   user-select: none;
+}
+.ac-disclosure--row > .ac-disclosure__summary {
+  display: flex;
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
 }
 .ac-disclosure__summary::-webkit-details-marker {
   display: none;

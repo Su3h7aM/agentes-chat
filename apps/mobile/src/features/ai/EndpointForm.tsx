@@ -19,6 +19,7 @@ import {
   endpointBaseExample,
   endpointModelsOf,
   endpointReady,
+  modelSummary,
   modelsShown,
   modelUnpricedInDraft,
   numberFieldLabel,
@@ -97,6 +98,7 @@ export function EndpointForm({
   const [saved, setSaved] = useState<{ key: Credential; checks: EndpointCheck[] } | null>(null);
   const [closing, setClosing] = useState(false);
   const [query, setQuery] = useState("");
+  const [openModel, setOpenModel] = useState<string | null>(null);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
   const search = (next: string) => {
     setPinned(new Set(draft.models.filter((m) => m.on).map((m) => m.id)));
@@ -315,6 +317,7 @@ export function EndpointForm({
           <GroupedFooter>{t("endpoint.addressHelp", { example: endpointBaseExample(draft.style) })}</GroupedFooter>
         </Locked>
       )}
+      {/* Fetching from the provider is the way in, so it heads the list. Typing an id is the fallback under it. */}
       <GroupedHeader
         aside={
           <Button
@@ -327,9 +330,180 @@ export function EndpointForm({
           />
         }
       >
-        {t("endpoint.addModel")}
+        {t("endpoint.choose")}
       </GroupedHeader>
       <Locked when={locked} style={styles.gap}>
+        {listError ? (
+          <Note icon="x" inset>
+            {t("endpoint.listFailed", { error: listError })}
+          </Note>
+        ) : null}
+        {draft.models.length > 0 ? (
+          <>
+            {searching ? (
+              <SearchField
+                value={query}
+                onChangeText={search}
+                placeholder={t("endpoint.search")}
+                accessibilityLabel={t("endpoint.search")}
+                raised
+              />
+            ) : null}
+            {shown.length === 0 ? (
+              <GroupedFooter>{t("endpoint.noMatch", { query: query.trim() })}</GroupedFooter>
+            ) : (
+              <View style={styles.gap}>
+                {shown.map((m) => (
+                  <View key={m.id} style={styles.gap}>
+                    <GroupedList>
+                      <GroupedRow
+                        label={m.id}
+                        labelLines={0}
+                        sub={modelSummary(m, t)}
+                        subLines={0}
+                        expanded={openModel === m.id}
+                        onPress={() => {
+                          setModel(m.id, { on: true });
+                          setOpenModel((open) => (open === m.id ? null : m.id));
+                        }}
+                        buttons={[
+                          {
+                            icon: m.on ? "check" : "plus",
+                            label: t(m.on ? "endpoint.deselectModel" : "endpoint.selectModel", { model: m.id }),
+                            onPress: () => {
+                              setModel(m.id, { on: !m.on });
+                              if (m.on) setOpenModel((open) => (open === m.id ? null : open));
+                            },
+                          },
+                        ]}
+                      />
+                    </GroupedList>
+                    {openModel === m.id ? (
+                      <>
+                        <GroupedHeader>{m.id}</GroupedHeader>
+                        <GroupedList>
+                          <GroupedField label={t("endpoint.capabilities.api")} stacked>
+                            <GroupedList>
+                              {[
+                                {
+                                  value: "auto" as const,
+                                  label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
+                                },
+                                ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({
+                                  value: value as keyof typeof ENDPOINT_API_LABELS,
+                                  label,
+                                })),
+                              ].map(({ value, label }) => (
+                                <GroupedRow
+                                  key={value}
+                                  label={label}
+                                  checked={(m.manual?.api ?? "auto") === value}
+                                  onPress={() =>
+                                    setModel(m.id, {
+                                      manual: { ...m.manual, api: value === "auto" ? undefined : value },
+                                    })
+                                  }
+                                />
+                              ))}
+                            </GroupedList>
+                          </GroupedField>
+                        </GroupedList>
+                        {[ENDPOINT_LIMITS, ENDPOINT_PRICES].map((fields, index) => (
+                          <View key={fields[0]}>
+                            <GroupedHeader>
+                              {t(index === 0 ? "endpoint.modelLimits" : "endpoint.modelPrices")}
+                            </GroupedHeader>
+                            <GroupedList>
+                              {fields.map((field) => {
+                                const limit = index === 0;
+                                const manual = m.manual?.[field];
+                                const auto = discoveredNumber(m, field);
+                                const invalid =
+                                  manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
+                                const label = t(numberFieldLabel(field));
+                                return (
+                                  <GroupedField key={field} label={label} stacked>
+                                    <TextInput
+                                      value={manual ?? (auto === undefined ? "" : String(auto))}
+                                      onChangeText={(v) => setModel(m.id, { manual: editNumber(m, field, v) })}
+                                      keyboardType={limit ? "number-pad" : "decimal-pad"}
+                                      placeholder={t("endpoint.capabilities.unknown")}
+                                      placeholderTextColor={c.faint}
+                                      accessibilityLabel={`${m.id} · ${label}`}
+                                      style={input}
+                                    />
+                                    {manual !== undefined && (
+                                      <Button
+                                        variant="text"
+                                        size="sm"
+                                        label={`${t("endpoint.capabilities.manual")} · ${t("endpoint.capabilities.reset")}`}
+                                        onPress={() => setModel(m.id, { manual: { ...m.manual, [field]: undefined } })}
+                                      />
+                                    )}
+                                    {invalid && (
+                                      <Text variant="footnote" tone="danger" accessibilityLiveRegion="polite">
+                                        {t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")}
+                                      </Text>
+                                    )}
+                                  </GroupedField>
+                                );
+                              })}
+                            </GroupedList>
+                            {index === 1 ? <GroupedFooter>{t("endpoint.priceUnit")}</GroupedFooter> : null}
+                          </View>
+                        ))}
+                        <GroupedHeader>{t("endpoint.modelAttachments")}</GroupedHeader>
+                        <GroupedList>
+                          {ENDPOINT_ATTACHMENTS.map((field) => {
+                            const auto = m.discovered?.[field]?.value;
+                            const manual = m.manual?.[field];
+                            return (
+                              <GroupedField key={field} label={t(`endpoint.capabilities.${field}`)} stacked>
+                                <Segmented
+                                  wide
+                                  value={manual === undefined ? "auto" : String(manual)}
+                                  items={[
+                                    { key: "auto", label: t("endpoint.capabilities.automatic") },
+                                    { key: "true", label: t("endpoint.capabilities.yes") },
+                                    { key: "false", label: t("endpoint.capabilities.no") },
+                                  ]}
+                                  onChange={(value) =>
+                                    setModel(m.id, {
+                                      manual: { ...m.manual, [field]: value === "auto" ? undefined : value === "true" },
+                                    })
+                                  }
+                                />
+                                <Text variant="footnote">
+                                  {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
+                                </Text>
+                              </GroupedField>
+                            );
+                          })}
+                        </GroupedList>
+                        {m.typed ? (
+                          <GroupedList>
+                            <GroupedRow
+                              icon="x"
+                              label={t("common.removeName", { name: m.id })}
+                              labelLines={0}
+                              danger
+                              onPress={() => {
+                                setDraft((d) => withoutModel(d, m.id));
+                                setOpenModel((open) => (open === m.id ? null : open));
+                              }}
+                            />
+                          </GroupedList>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        ) : null}
+        {/* With nothing listed yet the field sits right under the list's header, which already says what it's for. */}
+        {draft.models.length > 0 ? <GroupedHeader>{t("endpoint.addModel")}</GroupedHeader> : null}
         <GroupedList>
           <GroupedField label={t("endpoint.models")}>
             <View style={styles.addRow}>
@@ -361,135 +535,6 @@ export function EndpointForm({
             </Text>
           </GroupedFooter>
         ) : null}
-        {listError ? (
-          <Note icon="x" inset>
-            {t("endpoint.listFailed", { error: listError })}
-          </Note>
-        ) : null}
-        {draft.models.length > 0 ? (
-          <>
-            <GroupedHeader>{t("endpoint.choose")}</GroupedHeader>
-            {searching ? (
-              <SearchField
-                value={query}
-                onChangeText={search}
-                placeholder={t("endpoint.search")}
-                accessibilityLabel={t("endpoint.search")}
-                raised
-              />
-            ) : null}
-            {shown.length === 0 ? (
-              <GroupedFooter>{t("endpoint.noMatch", { query: query.trim() })}</GroupedFooter>
-            ) : (
-              <GroupedList>
-                {shown.map((m) => (
-                  <GroupedRow
-                    key={m.id}
-                    label={m.id}
-                    checked={m.on}
-                    onPress={() => setModel(m.id, { on: !m.on })}
-                    remove={{
-                      label: t("common.removeName", { name: m.id }),
-                      onPress: () => setDraft((d) => withoutModel(d, m.id)),
-                    }}
-                  />
-                ))}
-              </GroupedList>
-            )}
-            {draft.models
-              .filter((m) => m.on)
-              .map((m) => (
-                <View key={m.id} style={styles.gap}>
-                  <GroupedHeader>{m.id}</GroupedHeader>
-                  <GroupedList>
-                    <GroupedField label={t("endpoint.capabilities.api")} stacked>
-                      <GroupedList>
-                        {[
-                          {
-                            value: "auto" as const,
-                            label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
-                          },
-                          ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({
-                            value: value as keyof typeof ENDPOINT_API_LABELS,
-                            label,
-                          })),
-                        ].map(({ value, label }) => (
-                          <GroupedRow
-                            key={value}
-                            label={label}
-                            checked={(m.manual?.api ?? "auto") === value}
-                            onPress={() =>
-                              setModel(m.id, { manual: { ...m.manual, api: value === "auto" ? undefined : value } })
-                            }
-                          />
-                        ))}
-                      </GroupedList>
-                    </GroupedField>
-                    {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
-                      const limit = index < ENDPOINT_LIMITS.length;
-                      const manual = m.manual?.[field];
-                      const auto = discoveredNumber(m, field);
-                      const invalid =
-                        manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
-                      const label = t(numberFieldLabel(field));
-                      return (
-                        <GroupedField key={field} label={label} stacked>
-                          <TextInput
-                            value={manual ?? (auto === undefined ? "" : String(auto))}
-                            onChangeText={(v) => setModel(m.id, { manual: editNumber(m, field, v) })}
-                            keyboardType={limit ? "number-pad" : "decimal-pad"}
-                            placeholder={t("endpoint.capabilities.unknown")}
-                            placeholderTextColor={c.faint}
-                            accessibilityLabel={`${m.id} · ${label}`}
-                            style={input}
-                          />
-                          {manual !== undefined && (
-                            <Button
-                              variant="text"
-                              size="sm"
-                              label={`${t("endpoint.capabilities.manual")} · ${t("endpoint.capabilities.reset")}`}
-                              onPress={() => setModel(m.id, { manual: { ...m.manual, [field]: undefined } })}
-                            />
-                          )}
-                          {invalid && (
-                            <Text variant="footnote" tone="danger" accessibilityLiveRegion="polite">
-                              {t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")}
-                            </Text>
-                          )}
-                        </GroupedField>
-                      );
-                    })}
-                    {ENDPOINT_ATTACHMENTS.map((field) => {
-                      const auto = m.discovered?.[field]?.value;
-                      const manual = m.manual?.[field];
-                      return (
-                        <GroupedField key={field} label={t(`endpoint.capabilities.${field}`)} stacked>
-                          <Segmented
-                            wide
-                            value={manual === undefined ? "auto" : String(manual)}
-                            items={[
-                              { key: "auto", label: t("endpoint.capabilities.automatic") },
-                              { key: "true", label: t("endpoint.capabilities.yes") },
-                              { key: "false", label: t("endpoint.capabilities.no") },
-                            ]}
-                            onChange={(value) =>
-                              setModel(m.id, {
-                                manual: { ...m.manual, [field]: value === "auto" ? undefined : value === "true" },
-                              })
-                            }
-                          />
-                          <Text variant="footnote">
-                            {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
-                          </Text>
-                        </GroupedField>
-                      );
-                    })}
-                  </GroupedList>
-                  <GroupedFooter>{t("endpoint.priceUnit")}</GroupedFooter>
-                </View>
-              ))}
-          </>
-        ) : null}
       </Locked>
       {draft.models.some((m) => m.on && modelUnpricedInDraft(m)) ? (
         <Note icon="info" inset>
@@ -517,7 +562,7 @@ export function EndpointForm({
 }
 
 const styles = StyleSheet.create({
-  gap: { gap: 10 },
+  gap: { gap: 12 },
   addRow: { flexDirection: "row", alignItems: "center" },
   input: { flex: 1, paddingVertical: 12, paddingHorizontal: 0 },
 });

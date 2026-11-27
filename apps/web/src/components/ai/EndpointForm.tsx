@@ -21,6 +21,7 @@ import {
   endpointBaseExample,
   endpointModelsOf,
   endpointReady,
+  modelSummary,
   modelsShown,
   modelUnpricedInDraft,
   numberFieldLabel,
@@ -39,6 +40,7 @@ import {
   Checkbox,
   DialogBody,
   DialogFooter,
+  Disclosure,
   Field,
   FormActions,
   FormStack,
@@ -88,6 +90,7 @@ export function EndpointForm({
   const [saved, setSaved] = useState<{ cred: Credential; checks: EndpointCheck[] } | null>(null);
   const [closing, setClosing] = useState(false);
   const [query, setQuery] = useState("");
+  const [openModel, setOpenModel] = useState<string | null>(null);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
   const search = (next: string) => {
     setPinned(new Set(draft.models.filter((m) => m.on).map((m) => m.id)));
@@ -121,7 +124,13 @@ export function EndpointForm({
     if (!next) return;
     setDraft(next);
     setTyped("");
-    // The + turns off with the field empty, and a × leaves with its row: the keyboard stays in the form.
+    // The + turns off with the field empty: the keyboard stays in the form.
+    typedBox.current?.focus();
+  };
+  /** A model typed by hand goes with its open row: the keyboard goes back to the field it was typed in. */
+  const remove = (id: string) => {
+    setDraft((d) => withoutModel(d, id));
+    setOpenModel((open) => (open === id ? null : open));
     typedBox.current?.focus();
   };
   const fetchModels = () => {
@@ -316,11 +325,17 @@ export function EndpointForm({
               </Field>
             </>
           )}
-          <Field
-            label={t("endpoint.addModel")}
-            id={`${ids}-typed`}
-            error={typedWrong ? t("endpoint.modelInvalid") : undefined}
-            labelAside={
+          {(list.data?.error || list.error) && (
+            <SettingNote icon="alert">
+              {t("endpoint.listFailed", { error: list.data?.error ?? list.error?.message ?? "" })}
+            </SettingNote>
+          )}
+          {/* Fetching from the provider is the way in, so it heads the list. Typing an id is the fallback under it. */}
+          <fieldset className="endpoint-models" aria-labelledby={`${ids}-choose`}>
+            <div className="ac-field__label-row">
+              <span className="ac-field__label" id={`${ids}-choose`}>
+                {t("endpoint.choose")}
+              </span>
               <button
                 type="button"
                 className="ac-link ac-link--muted small"
@@ -333,7 +348,181 @@ export function EndpointForm({
                   {t("endpoint.fetch")}
                 </span>
               </button>
-            }
+            </div>
+            {searching && (
+              <SearchField
+                aria-label={t("endpoint.search")}
+                placeholder={t("endpoint.search")}
+                value={query}
+                onChange={(e) => search(e.target.value)}
+                onClear={() => search("")}
+                clearLabel={t("filters.clearSearch")}
+              />
+            )}
+            {searching && shown.length === 0 && (
+              <SettingNote icon="search">{t("endpoint.noMatch", { query: query.trim() })}</SettingNote>
+            )}
+            {shown.map((m) => {
+              return (
+                <div
+                  key={m.id}
+                  className={openModel === m.id ? "endpoint-model endpoint-model--open" : "endpoint-model"}
+                >
+                  <Checkbox
+                    aria-label={m.id}
+                    id={`${ids}-m-${m.id}`}
+                    checked={m.on}
+                    onCheckedChange={(on) => {
+                      setModel(m.id, { on });
+                      if (!on) setOpenModel((open) => (open === m.id ? null : open));
+                    }}
+                  />
+                  <Disclosure
+                    name={`${ids}-models`}
+                    open={openModel === m.id}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        setModel(m.id, { on: true });
+                        setOpenModel(m.id);
+                      } else {
+                        setOpenModel((current) => (current === m.id ? null : current));
+                      }
+                    }}
+                    variant="row"
+                    className="endpoint-model__disclosure"
+                    summary={
+                      <>
+                        <span className="endpoint-model__name">{m.id}</span>
+                        <span className="endpoint-model__summary">{modelSummary(m, t)}</span>
+                      </>
+                    }
+                  >
+                    <div className="endpoint-model__capabilities">
+                      <Field label={t("endpoint.capabilities.api")} id={`${ids}-${m.id}-api`}>
+                        <Select
+                          aria-label={`${m.id} · ${t("endpoint.capabilities.api")}`}
+                          value={m.manual?.api ?? "auto"}
+                          options={[
+                            {
+                              value: "auto",
+                              label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
+                            },
+                            ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({ value, label })),
+                          ]}
+                          onValueChange={(value) =>
+                            setManual(m, {
+                              ...m.manual,
+                              api: value === "auto" ? undefined : (value as keyof typeof ENDPOINT_API_LABELS),
+                            })
+                          }
+                        />
+                      </Field>
+                      {[ENDPOINT_LIMITS, ENDPOINT_PRICES].map((fields, index) => (
+                        <section key={fields[0]} className="endpoint-model__group">
+                          <b>{t(index === 0 ? "endpoint.modelLimits" : "endpoint.modelPrices")}</b>
+                          <div className="endpoint-model__fields">
+                            {fields.map((field) => {
+                              const limit = index === 0;
+                              const manual = m.manual?.[field];
+                              const auto = discoveredNumber(m, field);
+                              const invalid =
+                                manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
+                              const label = t(numberFieldLabel(field));
+                              return (
+                                <Field
+                                  key={field}
+                                  label={label}
+                                  id={`${ids}-${m.id}-${field}`}
+                                  error={
+                                    invalid
+                                      ? t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")
+                                      : undefined
+                                  }
+                                  labelAside={
+                                    manual === undefined ? undefined : (
+                                      <button
+                                        type="button"
+                                        className="ac-link ac-link--muted small"
+                                        aria-label={`${label} · ${t("endpoint.capabilities.reset")}`}
+                                        onClick={() => setManual(m, { ...m.manual, [field]: undefined })}
+                                      >
+                                        {t("endpoint.capabilities.manual")} · {t("endpoint.capabilities.reset")}
+                                      </button>
+                                    )
+                                  }
+                                >
+                                  <Input
+                                    value={manual ?? auto ?? ""}
+                                    inputMode={limit ? "numeric" : "decimal"}
+                                    placeholder={t("endpoint.capabilities.unknown")}
+                                    aria-label={
+                                      field === "input" || field === "output"
+                                        ? t(field === "input" ? "endpoint.priceIn" : "endpoint.priceOut", {
+                                            model: m.id,
+                                          })
+                                        : `${m.id} · ${label}`
+                                    }
+                                    onChange={(e) => setManual(m, editNumber(m, field, e.target.value))}
+                                  />
+                                </Field>
+                              );
+                            })}
+                          </div>
+                          {index === 1 && <span className="ac-field__example">{t("endpoint.priceUnit")}</span>}
+                        </section>
+                      ))}
+                      <section className="endpoint-model__group">
+                        <b>{t("endpoint.modelAttachments")}</b>
+                        <div className="endpoint-model__fields">
+                          {ENDPOINT_ATTACHMENTS.map((field) => {
+                            const auto = m.discovered?.[field]?.value;
+                            const manual = m.manual?.[field];
+                            const label = t(`endpoint.capabilities.${field}`);
+                            return (
+                              <Field key={field} label={label} group>
+                                <Segmented
+                                  label={`${m.id} · ${label}`}
+                                  value={manual === undefined ? "auto" : String(manual)}
+                                  options={[
+                                    { value: "auto", label: t("endpoint.capabilities.automatic") },
+                                    { value: "true", label: t("endpoint.capabilities.yes") },
+                                    { value: "false", label: t("endpoint.capabilities.no") },
+                                  ]}
+                                  onValueChange={(value) =>
+                                    setManual(m, {
+                                      ...m.manual,
+                                      [field]: value === "auto" ? undefined : value === "true",
+                                    })
+                                  }
+                                />
+                                <span className="ac-field__example">
+                                  {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
+                                </span>
+                              </Field>
+                            );
+                          })}
+                        </div>
+                      </section>
+                      {m.typed && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          className="endpoint-model__remove"
+                          onClick={() => remove(m.id)}
+                        >
+                          {t("common.removeName", { name: m.id })}
+                        </Button>
+                      )}
+                    </div>
+                  </Disclosure>
+                </div>
+              );
+            })}
+          </fieldset>
+          <Field
+            label={t("endpoint.addModel")}
+            id={`${ids}-typed`}
+            error={typedWrong ? t("endpoint.modelInvalid") : undefined}
           >
             <AffixInput
               ref={typedBox}
@@ -364,145 +553,6 @@ export function EndpointForm({
               }}
             />
           </Field>
-          {(list.data?.error || list.error) && (
-            <SettingNote icon="alert">
-              {t("endpoint.listFailed", { error: list.data?.error ?? list.error?.message ?? "" })}
-            </SettingNote>
-          )}
-          {draft.models.length > 0 && (
-            <fieldset className="endpoint-models" aria-labelledby={`${ids}-choose`}>
-              <span className="ac-field__label" id={`${ids}-choose`}>
-                {t("endpoint.choose")}
-              </span>
-              {searching && (
-                <SearchField
-                  aria-label={t("endpoint.search")}
-                  placeholder={t("endpoint.search")}
-                  value={query}
-                  onChange={(e) => search(e.target.value)}
-                  onClear={() => search("")}
-                  clearLabel={t("filters.clearSearch")}
-                />
-              )}
-              {searching && shown.length === 0 && (
-                <SettingNote icon="search">{t("endpoint.noMatch", { query: query.trim() })}</SettingNote>
-              )}
-              {shown.map((m) => {
-                return (
-                  <div key={m.id} className="endpoint-model">
-                    <Checkbox id={`${ids}-m-${m.id}`} checked={m.on} onCheckedChange={(on) => setModel(m.id, { on })} />
-                    <label htmlFor={`${ids}-m-${m.id}`}>{m.id}</label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      iconOnly
-                      icon="close"
-                      aria-label={t("common.removeName", { name: m.id })}
-                      onClick={() => {
-                        setDraft((d) => withoutModel(d, m.id));
-                        typedBox.current?.focus();
-                      }}
-                    />
-                    {m.on && (
-                      <div className="endpoint-model__capabilities">
-                        <Field label={t("endpoint.capabilities.api")} id={`${ids}-${m.id}-api`}>
-                          <Select
-                            aria-label={`${m.id} · ${t("endpoint.capabilities.api")}`}
-                            value={m.manual?.api ?? "auto"}
-                            options={[
-                              {
-                                value: "auto",
-                                label: `${t("endpoint.capabilities.automatic")} · ${m.discovered?.api ? ENDPOINT_API_LABELS[m.discovered.api.value] : t("endpoint.capabilities.apiFallback", { api: ENDPOINT_API_LABELS[draft.style === "anthropic" ? "messages" : "chat"] })}`,
-                              },
-                              ...Object.entries(ENDPOINT_API_LABELS).map(([value, label]) => ({ value, label })),
-                            ]}
-                            onValueChange={(value) =>
-                              setManual(m, {
-                                ...m.manual,
-                                api: value === "auto" ? undefined : (value as keyof typeof ENDPOINT_API_LABELS),
-                              })
-                            }
-                          />
-                        </Field>
-                        {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
-                          const limit = index < ENDPOINT_LIMITS.length;
-                          const manual = m.manual?.[field];
-                          const auto = discoveredNumber(m, field);
-                          const invalid =
-                            manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
-                          const label = t(numberFieldLabel(field));
-                          return (
-                            <Field
-                              key={field}
-                              label={label}
-                              id={`${ids}-${m.id}-${field}`}
-                              error={
-                                invalid
-                                  ? t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")
-                                  : undefined
-                              }
-                              labelAside={
-                                manual === undefined ? undefined : (
-                                  <button
-                                    type="button"
-                                    className="ac-link ac-link--muted small"
-                                    aria-label={`${label} · ${t("endpoint.capabilities.reset")}`}
-                                    onClick={() => setManual(m, { ...m.manual, [field]: undefined })}
-                                  >
-                                    {t("endpoint.capabilities.manual")} · {t("endpoint.capabilities.reset")}
-                                  </button>
-                                )
-                              }
-                            >
-                              <Input
-                                value={manual ?? auto ?? ""}
-                                inputMode={limit ? "numeric" : "decimal"}
-                                placeholder={t("endpoint.capabilities.unknown")}
-                                aria-label={
-                                  field === "input" || field === "output"
-                                    ? t(field === "input" ? "endpoint.priceIn" : "endpoint.priceOut", { model: m.id })
-                                    : `${m.id} · ${label}`
-                                }
-                                onChange={(e) => setManual(m, editNumber(m, field, e.target.value))}
-                              />
-                            </Field>
-                          );
-                        })}
-                        {ENDPOINT_ATTACHMENTS.map((field) => {
-                          const auto = m.discovered?.[field]?.value;
-                          const manual = m.manual?.[field];
-                          const label = t(`endpoint.capabilities.${field}`);
-                          return (
-                            <Field key={field} label={label} group>
-                              <Segmented
-                                label={`${m.id} · ${label}`}
-                                value={manual === undefined ? "auto" : String(manual)}
-                                options={[
-                                  { value: "auto", label: t("endpoint.capabilities.automatic") },
-                                  { value: "true", label: t("endpoint.capabilities.yes") },
-                                  { value: "false", label: t("endpoint.capabilities.no") },
-                                ]}
-                                onValueChange={(value) =>
-                                  setManual(m, {
-                                    ...m.manual,
-                                    [field]: value === "auto" ? undefined : value === "true",
-                                  })
-                                }
-                              />
-                              <span className="ac-field__example">
-                                {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
-                              </span>
-                            </Field>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {draft.models.some((m) => m.on) && <span className="ac-field__example">{t("endpoint.priceUnit")}</span>}
-            </fieldset>
-          )}
           {unpriced && <SettingNote icon="info">{t("endpoint.unpriced")}</SettingNote>}
         </Body>
       </Locked>

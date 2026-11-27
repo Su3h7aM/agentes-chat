@@ -29,6 +29,8 @@ export type EndpointNumberField = (typeof ENDPOINT_LIMITS)[number] | (typeof END
 
 export interface EndpointModelDraft extends Pick<EndpointModel, "id" | "label" | "discovered" | "apiCheckedAt"> {
   on: boolean;
+  /** Typed by hand and absent from the provider's list: the one kind of model the form lets its person remove. */
+  typed?: true;
   manual?: Partial<Record<EndpointNumberField, string> & Record<EndpointAttachment, boolean>> & { api?: EndpointApi };
 }
 
@@ -67,7 +69,10 @@ export function withEndpointAddress(draft: EndpointDraft, baseURL: string): Endp
   };
 }
 
-/** Refresh metadata, keeping the selection, typed values and any previous attachment test. */
+/**
+ * Refresh metadata, keeping the selection, typed values and any previous attachment test. A model typed by hand that the
+ * provider now lists is the provider's from then on.
+ */
 export function withListedModels(
   draft: EndpointDraft,
   listed: readonly Pick<EndpointModel, "id" | "label" | "discovered" | "apiCheckedAt">[],
@@ -77,8 +82,9 @@ export function withListedModels(
     const found = byId.get(m.id);
     if (!found) return m;
     byId.delete(m.id);
+    const { typed: _typed, ...kept } = m;
     return {
-      ...m,
+      ...kept,
       label: found.label ?? m.label,
       apiCheckedAt:
         found.apiCheckedAt && (!m.apiCheckedAt || Date.parse(found.apiCheckedAt) > Date.parse(m.apiCheckedAt))
@@ -96,12 +102,13 @@ export function withTypedModel(draft: EndpointDraft, typed: string): EndpointDra
   if (!MODEL_ID.test(id)) return null;
   if (draft.models.some((m) => m.id === id))
     return { ...draft, models: draft.models.map((m) => (m.id === id ? { ...m, on: true } : m)) };
-  return { ...draft, models: [...draft.models, { id, on: true }] };
+  return { ...draft, models: [...draft.models, { id, on: true, typed: true }] };
 }
 
+/** A model the provider lists stays listed (unticking leaves it out), so only one typed by hand goes. */
 export const withoutModel = (draft: EndpointDraft, id: string): EndpointDraft => ({
   ...draft,
-  models: draft.models.filter((m) => m.id !== id),
+  models: draft.models.filter((m) => m.id !== id || !m.typed),
 });
 
 /** A typed price: empty is none, a comma reads as the decimal point; null when it isn't a price. */
@@ -153,6 +160,23 @@ export function editNumber(m: EndpointModelDraft, field: EndpointNumberField, ra
   const parse = field === "contextWindow" || field === "maxOutputTokens" ? parseLimit : parsePrice;
   const auto = discoveredNumber(m, field);
   return { ...m.manual, [field]: parse(raw) === auto ? undefined : raw };
+}
+
+/** A compact status stays visible even when another editor is open. */
+export function modelSummary(
+  m: EndpointModelDraft,
+  t: (key: "endpoint.modelInvalidValues" | "endpoint.modelMissingPrice" | "endpoint.capabilities.automatic") => string,
+): string {
+  const invalid =
+    ENDPOINT_LIMITS.some((field) => parseLimit(m.manual?.[field] ?? "") === null) ||
+    ENDPOINT_PRICES.some((field) => parsePrice(m.manual?.[field] ?? "") === null);
+  const status = [
+    m.on && invalid ? t("endpoint.modelInvalidValues") : "",
+    m.on && modelUnpricedInDraft(m) ? t("endpoint.modelMissingPrice") : "",
+  ].filter(Boolean);
+  if (status.length) return status.join(" · ");
+  const api = m.manual?.api ?? m.discovered?.api?.value;
+  return api ? ENDPOINT_API_LABELS[api] : t("endpoint.capabilities.automatic");
 }
 
 /** Only write manual fields. An explicit empty object clears the previous overrides. */

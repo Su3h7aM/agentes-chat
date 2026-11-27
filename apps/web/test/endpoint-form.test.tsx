@@ -46,6 +46,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     // Listed models start off: nothing to save yet.
     expect(save().hasAttribute("disabled")).toBe(true);
     await click(within(add).getByRole("checkbox", { name: "llama-4" }));
+    await click(add.querySelector(".endpoint-model summary") as Element);
     expect(within(add).getByRole("combobox", { name: "llama-4 · API do modelo" }).textContent).toContain(
       "Chat Completions como alternativa",
     );
@@ -134,6 +135,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     expect(state.calls.find((c) => c.method === "agents.endpointModels")?.args[1]).toEqual({
       credentialId: "saved-gw",
     });
+    await click(dialog.querySelector(".endpoint-model summary") as Element);
     await click(within(dialog).getByRole("button", { name: "Entrada · Usar valor descoberto" }));
     expect((within(dialog).getByLabelText("model-a: preço de entrada") as HTMLInputElement).value).toBe("0");
     await click(within(dialog).getByRole("button", { name: "Salvar e testar de novo" }));
@@ -211,14 +213,16 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     expect(state.credentials.map((c) => c.id)).toEqual(["cred-gw"]);
   });
 
-  test("laid out as a dialog: its fields in the body, Buscar modelos on the label's line, Cancelar then the save in the footer", async () => {
+  test("laid out as a dialog: its fields in the body, Buscar modelos on the list's label line, Cancelar then the save in the footer", async () => {
     const { add } = await openForm();
     const body = add.querySelector(".ac-dialog__body") as HTMLElement;
     expect(body.querySelector(".ac-brand__initial")).toBeNull();
     expect(body.querySelector('.ac-brand[data-mark="custom"]')).not.toBeNull();
     expect(within(body).queryByRole("radiogroup", { name: "API" })).toBeNull();
     const fetch = within(body).getByRole("button", { name: "Buscar modelos" });
-    expect(fetch.closest(".ac-field__label-row")?.textContent).toContain("Adicionar um modelo");
+    expect(fetch.closest(".ac-field__label-row")?.textContent).toContain(
+      "Escolha os modelos que os agentes podem usar",
+    );
     expect(fetch.className).not.toContain("ac-btn");
     expect(within(body).getByRole("button", { name: "Adicionar" }).closest(".ac-input-affix")).not.toBeNull();
     const foot = add.querySelector(".ac-dialog__foot") as HTMLElement;
@@ -227,7 +231,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     expect(screen().queryByRole("dialog", { name: "Adicionar chave de API" })).toBeNull();
   });
 
-  test("by keyboard: Enter adds without saving, the + and a × leave the focus in the field, Buscar modelos comes before it", async () => {
+  test("by keyboard: Enter adds without saving, the + and Remover leave the focus in the field, Buscar modelos comes before it", async () => {
     const { add, api } = await openForm();
     const typed = within(add).getByLabelText("Adicionar um modelo") as HTMLInputElement;
     await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
@@ -248,6 +252,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     await act(async () => plus.focus());
     await click(plus);
     expect(document.activeElement).toBe(typed);
+    await click(add.querySelectorAll(".endpoint-model summary")[1] as Element);
     const remove = within(add).getByRole("button", { name: "Remover qwen-3" });
     await act(async () => remove.focus());
     await click(remove);
@@ -256,6 +261,116 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     const fetch = within(add).getByRole("button", { name: "Buscar modelos" }) as HTMLButtonElement;
     expect(fetch.disabled).toBe(false);
     expect(fetch.compareDocumentPosition(typed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("model rows start closed and expose one shared disclosure group with effective facts", async () => {
+    const at = "2026-11-01T10:00:00.000Z";
+    const id = `vendor/${"long-model-".repeat(10)}v1`;
+    const discovered = {
+      api: { source: "endpoint" as const, value: "responses" as const, discoveredAt: at },
+      contextWindow: { source: "endpoint" as const, value: 128000, discoveredAt: at },
+      prices: { input: { source: "endpoint" as const, value: 0, discoveredAt: at } },
+      image: { source: "endpoint" as const, value: true, discoveredAt: at },
+    };
+    const { add } = await openForm(
+      seedState({ endpointList: { baseURL: "https://gw.example/v1", models: [{ id, discovered }, { id: "second" }] } }),
+    );
+    await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
+    await click(within(add).getByRole("button", { name: "Buscar modelos" }));
+    const details = [...add.querySelectorAll<HTMLDetailsElement>(".endpoint-model details")];
+    expect(details).toHaveLength(2);
+    const [first, second] = details;
+    if (!first || !second) throw new Error("Expected two model rows");
+    expect(details.every((d) => !d.open)).toBe(true);
+    expect(add.querySelectorAll(".endpoint-model--open")).toHaveLength(0);
+    expect(first.getAttribute("name")).toBeTruthy();
+    expect(second.getAttribute("name")).toBe(first.getAttribute("name"));
+    expect(add.querySelectorAll(".endpoint-model details[open] .endpoint-model__capabilities")).toHaveLength(0);
+    expect(first.querySelector("summary")?.textContent).toContain("OpenAI Responses");
+    await click(first.querySelector("summary") as Element);
+    expect(first.open).toBe(true);
+    expect(first.closest(".endpoint-model--open")).not.toBeNull();
+    expect(second.closest(".endpoint-model--open")).toBeNull();
+    expect(add.querySelectorAll(".endpoint-model details[open] .endpoint-model__capabilities")).toHaveLength(1);
+    expect(within(first).getByRole("combobox", { name: `${id} · API do modelo` })).toBeDefined();
+    (globalThis as { geometrySnapshot?: () => void }).geometrySnapshot?.();
+    expect(first.querySelector("summary input, summary button")).toBeNull();
+    expect(within(add).getByRole("checkbox", { name: id }).getAttribute("aria-checked")).toBe("true");
+    await type(within(add).getByLabelText(`${id}: preço de entrada`), "bad");
+    await click(second.querySelector("summary") as Element);
+    expect(first.open).toBe(false);
+    expect(first.closest(".endpoint-model--open")).toBeNull();
+    expect(second.closest(".endpoint-model--open")).not.toBeNull();
+    expect(within(second).getByRole("combobox", { name: "second · API do modelo" })).toBeDefined();
+    expect(first.querySelector("summary")?.textContent).toContain("Revise os valores inválidos");
+    expect(second.querySelector("summary")?.textContent).toContain("Falta preço");
+    expect(within(add).getByRole("checkbox", { name: "second" }).getAttribute("aria-checked")).toBe("true");
+    await click(within(add).getByRole("checkbox", { name: "second" }));
+    expect(second.open).toBe(false);
+    expect(add.querySelectorAll(".endpoint-model--open")).toHaveLength(0);
+  });
+
+  test("models the provider lists have no Remover; one typed by hand has it only in its open row, under the list's field", async () => {
+    const { add } = await openForm(
+      seedState({ endpointList: { baseURL: "https://gw.example/v1", models: [{ id: "llama-4" }, { id: "qwen-3" }] } }),
+    );
+    await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
+    await click(within(add).getByRole("button", { name: "Buscar modelos" }));
+    const typed = within(add).getByLabelText("Adicionar um modelo");
+    await type(typed, "my-finetune");
+    await act(async () => fireEvent.keyDown(typed, { key: "Enter" }));
+    await settle();
+    const rows = () => [...add.querySelectorAll<HTMLElement>(".endpoint-model")];
+    const row = (id: string) => rows().find((r) => r.querySelector(".endpoint-model__name")?.textContent === id);
+    expect(rows().map((r) => r.querySelector(".endpoint-model__name")?.textContent)).toEqual([
+      "llama-4",
+      "qwen-3",
+      "my-finetune",
+    ]);
+    // Typing an id is the fallback: its field comes after every row.
+    const last = rows().at(-1) as HTMLElement;
+    expect(last.compareDocumentPosition(typed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Closed rows carry no action of their own beside the chevron.
+    expect(add.querySelectorAll(".endpoint-model > .ac-btn")).toHaveLength(0);
+    // Only the typed model has a Remover at all, and it lives in its row's panel (a closed `<details>` hides it).
+    const removers = [...add.querySelectorAll("button")].filter((b) => b.textContent?.startsWith("Remover "));
+    expect(removers.map((b) => b.textContent)).toEqual(["Remover my-finetune"]);
+    expect(removers[0]?.closest("details:not([open]) .ac-disclosure__body")).not.toBeNull();
+
+    await click(row("llama-4")?.querySelector("summary") as Element);
+    expect(row("llama-4")?.querySelector(".endpoint-model__capabilities")).not.toBeNull();
+    expect(within(add).queryByRole("button", { name: "Remover llama-4" })).toBeNull();
+
+    await click(within(add).getByRole("checkbox", { name: "qwen-3" }));
+    await click(row("my-finetune")?.querySelector("summary") as Element);
+    expect(row("llama-4")?.querySelector("details")?.open).toBe(false);
+    const remove = within(add).getByRole("button", { name: "Remover my-finetune" });
+    expect(remove.closest(".endpoint-model__capabilities")).not.toBeNull();
+    expect(remove.closest("summary")).toBeNull();
+    await click(remove);
+    expect(row("my-finetune")).toBeUndefined();
+    expect(add.querySelectorAll(".endpoint-model--open")).toHaveLength(0);
+    expect(document.activeElement).toBe(typed);
+    // The rest keep their selection: removing one model never unticks another.
+    expect(within(add).getByRole("checkbox", { name: "llama-4" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(add).getByRole("checkbox", { name: "qwen-3" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  test("an id typed by hand that the provider then lists is the provider's: no Remover once fetched", async () => {
+    const { add } = await openForm(
+      seedState({ endpointList: { baseURL: "https://gw.example/v1", models: [{ id: "llama-4" }] } }),
+    );
+    await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
+    const typed = within(add).getByLabelText("Adicionar um modelo");
+    await type(typed, "llama-4");
+    await act(async () => fireEvent.keyDown(typed, { key: "Enter" }));
+    await settle();
+    await click(add.querySelector(".endpoint-model summary") as Element);
+    expect(within(add).getByRole("button", { name: "Remover llama-4" })).toBeDefined();
+    await click(within(add).getByRole("button", { name: "Buscar modelos" }));
+    expect(add.querySelectorAll(".endpoint-model")).toHaveLength(1);
+    expect(within(add).getByRole("checkbox", { name: "llama-4" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(add).queryByRole("button", { name: "Remover llama-4" })).toBeNull();
   });
 
   test("a long list gets a search over it: ticked models stay on top, the rest filter by their id, no select-all", async () => {
@@ -268,7 +383,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     );
     await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
     await click(within(add).getByRole("button", { name: "Buscar modelos" }));
-    const rows = () => [...add.querySelectorAll(".endpoint-model > label")].map((l) => l.textContent);
+    const rows = () => [...add.querySelectorAll(".endpoint-model__name")].map((l) => l.textContent);
     expect(rows()).toHaveLength(15);
     await click(within(add).getByRole("checkbox", { name: "kimi-k2" }));
     const search = within(add).getByRole("searchbox", { name: "Buscar modelo" });
@@ -296,7 +411,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     expect(within(add).queryByRole("searchbox")).toBeNull();
   });
 
-  test("Enter adds a typed model, its × takes it off, and while saving every control is off", async () => {
+  test("Enter adds a typed model, Remover in its open row takes it off, and while saving every control is off", async () => {
     const { add, api } = await openForm();
     await type(within(add).getByLabelText("Nome"), "OpenGateway");
     await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
@@ -307,6 +422,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
       await settle();
     }
     expect((typed as HTMLInputElement).value).toBe("");
+    await click(add.querySelectorAll(".endpoint-model summary")[1] as Element);
     await click(within(add).getByRole("button", { name: "Remover qwen-3" }));
     expect(within(add).queryByRole("checkbox", { name: "qwen-3" })).toBeNull();
     expect(within(add).getByRole("checkbox", { name: "llama-4" })).toBeDefined();
