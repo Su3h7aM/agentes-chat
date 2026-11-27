@@ -1,20 +1,32 @@
 import type { Credential, EndpointCheck, EndpointStyle } from "@agenteschat/client";
-import { useAddCredential, useEndpointModels, useSetEndpointModels } from "@agenteschat/client";
+import { useAddCredential, useEndpointModels, useProbeEndpoint, useSetEndpointModels } from "@agenteschat/client";
 import {
+  attachmentLabel,
+  attachmentValue,
   CHECK_VIEW,
   CUSTOM_PROVIDER,
   checksInOrder,
+  discoveredNumber,
   draftOfEndpoint,
+  ENDPOINT_ATTACHMENTS,
+  ENDPOINT_LIMITS,
+  ENDPOINT_PRICES,
   ENDPOINT_SEARCH_FROM,
   ENDPOINT_STYLES,
   type EndpointDraft,
+  type EndpointModelDraft,
+  editNumber,
   emptyEndpointDraft,
   endpointAddressLooksValid,
   endpointBaseExample,
   endpointModelsOf,
   endpointReady,
   modelsShown,
-  pricesProblem,
+  modelUnpricedInDraft,
+  numberFieldLabel,
+  parseLimit,
+  parsePrice,
+  pendingAttachments,
   withChecks,
   withListedModels,
   withoutModel,
@@ -84,6 +96,19 @@ export function EndpointForm({
   const list = useEndpointModels(orgId);
   const add = useAddCredential(orgId);
   const change = useSetEndpointModels(orgId);
+  const probe = useProbeEndpoint(orgId);
+  const testAttachments = (credentialId: string, models: string[], force?: true) =>
+    probe.mutate(
+      { credentialId, models, ...(force ? { force } : {}) },
+      {
+        onSuccess: (result) =>
+          setSaved((current) => {
+            const endpoint = current?.cred.endpoint;
+            if (!current || !endpoint) return current;
+            return { ...current, cred: { ...current.cred, endpoint: { ...endpoint, models: result.models } } };
+          }),
+      },
+    );
   const editing = credential !== undefined;
   const set = (patch: Partial<EndpointDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const setModel = (id: string, patch: Partial<EndpointDraft["models"][number]>) =>
@@ -97,11 +122,24 @@ export function EndpointForm({
     // The + turns off with the field empty, and a × leaves with its row: the keyboard stays in the form.
     typedBox.current?.focus();
   };
-  const fetchModels = () =>
-    list.mutate(
-      { style: draft.style, baseURL: draft.baseURL.trim(), apiKey: draft.apiKey.trim() || undefined },
-      { onSuccess: (r) => setDraft((d) => ({ ...withListedModels(d, r.models), baseURL: r.baseURL })) },
-    );
+  const fetchModels = () => {
+    const input = credential
+      ? { credentialId: credential.id }
+      : {
+          style: draft.style,
+          baseURL: draft.baseURL.trim(),
+          apiKey: draft.apiKey.trim() || undefined,
+        };
+    list.mutate(input, {
+      onSuccess: (r) => setDraft((d) => ({ ...withListedModels(d, r.models), baseURL: r.baseURL })),
+    });
+  };
+  const showResults = (cred: Credential, checks: EndpointCheck[]) => {
+    const checked = withChecks(cred, checks);
+    setSaved({ cred: checked, checks });
+    const models = checked.endpoint?.models.filter((m) => pendingAttachments(m).length).map((m) => m.id);
+    if (models?.length) testAttachments(cred.id, models);
+  };
   const save = () => {
     const models = endpointModelsOf(draft);
     if (!models) return;
@@ -110,13 +148,13 @@ export function EndpointForm({
         { credentialId: credential.id, models },
         {
           onSuccess: (r) =>
-            setSaved({
-              cred: {
+            showResults(
+              {
                 ...credential,
                 ...(credential.endpoint ? { endpoint: { ...credential.endpoint, models: r.models } } : {}),
               },
-              checks: r.checks,
-            }),
+              r.checks,
+            ),
         },
       );
       return;
@@ -132,12 +170,15 @@ export function EndpointForm({
           models,
         },
       },
-      { onSuccess: ({ checks, ...cred }) => setSaved({ cred, checks: checks ?? [] }) },
+      { onSuccess: ({ checks, ...cred }) => showResults(cred, checks ?? []) },
     );
   };
   const saving = add.isPending || change.isPending;
+  const locked = saving || list.isPending;
+  const resultModels = saved?.cred.endpoint?.models ?? [];
+  const setManual = (m: EndpointModelDraft, manual: EndpointModelDraft["manual"]) => setModel(m.id, { manual });
   const ready = editing ? endpointModelsOf(draft) !== null : endpointReady(draft);
-  const unpriced = draft.models.some((m) => m.on && !m.input.trim() && !m.output.trim());
+  const unpriced = draft.models.some((m) => m.on && modelUnpricedInDraft(m));
 
   const Body = onCancel ? DialogBody : FormStack;
   const Foot = onCancel ? DialogFooter : FormActions;
@@ -165,6 +206,31 @@ export function EndpointForm({
               );
             })}
           </ul>
+          {resultModels.map((model) => (
+            <div className="ac-iconline endpoint-attachments" key={model.id} aria-live="polite">
+              <b>{model.id}</b>
+              {ENDPOINT_ATTACHMENTS.map((field) => {
+                const testing =
+                  probe.isPending &&
+                  probe.variables.models?.includes(model.id) &&
+                  pendingAttachments(model, probe.variables.force).includes(field);
+                return (
+                  <span className="ac-field__example" key={field}>
+                    {t(`endpoint.capabilities.${field}`)} ·{" "}
+                    {t(testing ? "endpoint.capabilities.testing" : attachmentLabel(attachmentValue(model, field)))}
+                  </span>
+                );
+              })}
+              <Button
+                size="sm"
+                disabled={probe.isPending || pendingAttachments(model, true).length === 0}
+                onClick={() => testAttachments(saved.cred.id, [model.id], true)}
+              >
+                {t("endpoint.capabilities.retest")}
+              </Button>
+            </div>
+          ))}
+          {probe.isError && <SettingNote icon="alert">{t("endpoint.capabilities.failed")}</SettingNote>}
         </Body>
         <Foot>
           <Button
@@ -174,7 +240,7 @@ export function EndpointForm({
             onClick={async () => {
               setClosing(true);
               try {
-                await onDone(withChecks(saved.cred, saved.checks));
+                await onDone(saved.cred);
               } finally {
                 setClosing(false);
               }
@@ -189,7 +255,7 @@ export function EndpointForm({
 
   return (
     <>
-      <Locked when={saving}>
+      <Locked when={locked}>
         <Body>
           {lead}
           {!editing && (
@@ -244,20 +310,18 @@ export function EndpointForm({
             id={`${ids}-typed`}
             error={typedWrong ? t("endpoint.modelInvalid") : undefined}
             labelAside={
-              !editing && (
-                <button
-                  type="button"
-                  className="ac-link ac-link--muted small"
-                  aria-busy={list.isPending || undefined}
-                  disabled={list.isPending || !endpointAddressLooksValid(draft.baseURL)}
-                  onClick={fetchModels}
-                >
-                  <span className="ac-iconline">
-                    {list.isPending && <Spinner size={12} />}
-                    {t("endpoint.fetch")}
-                  </span>
-                </button>
-              )
+              <button
+                type="button"
+                className="ac-link ac-link--muted small"
+                aria-busy={list.isPending || undefined}
+                disabled={locked || (!editing && !endpointAddressLooksValid(draft.baseURL))}
+                onClick={fetchModels}
+              >
+                <span className="ac-iconline">
+                  {list.isPending && <Spinner size={12} />}
+                  {t("endpoint.fetch")}
+                </span>
+              </button>
             }
           >
             <AffixInput
@@ -289,8 +353,10 @@ export function EndpointForm({
               }}
             />
           </Field>
-          {list.data?.error && (
-            <SettingNote icon="alert">{t("endpoint.listFailed", { error: list.data.error })}</SettingNote>
+          {(list.data?.error || list.error) && (
+            <SettingNote icon="alert">
+              {t("endpoint.listFailed", { error: list.data?.error ?? list.error?.message ?? "" })}
+            </SettingNote>
           )}
           {draft.models.length > 0 && (
             <fieldset className="endpoint-models" aria-labelledby={`${ids}-choose`}>
@@ -311,7 +377,6 @@ export function EndpointForm({
                 <SettingNote icon="search">{t("endpoint.noMatch", { query: query.trim() })}</SettingNote>
               )}
               {shown.map((m) => {
-                const problem = m.on ? pricesProblem(m) : null;
                 return (
                   <div key={m.id} className="endpoint-model">
                     <Checkbox id={`${ids}-m-${m.id}`} checked={m.on} onCheckedChange={(on) => setModel(m.id, { on })} />
@@ -328,28 +393,78 @@ export function EndpointForm({
                       }}
                     />
                     {m.on && (
-                      <span className="endpoint-model__prices">
-                        <Input
-                          aria-label={t("endpoint.priceIn", { model: m.id })}
-                          placeholder={t("endpoint.priceInShort")}
-                          inputMode="decimal"
-                          value={m.input}
-                          invalid={problem !== null}
-                          onChange={(e) => setModel(m.id, { input: e.target.value })}
-                        />
-                        <Input
-                          aria-label={t("endpoint.priceOut", { model: m.id })}
-                          placeholder={t("endpoint.priceOutShort")}
-                          inputMode="decimal"
-                          value={m.output}
-                          invalid={problem !== null}
-                          onChange={(e) => setModel(m.id, { output: e.target.value })}
-                        />
-                      </span>
-                    )}
-                    {problem && (
-                      <div className="ac-field__error endpoint-model__error" role="alert">
-                        {t(problem === "both" ? "endpoint.priceBoth" : "endpoint.priceInvalid")}
+                      <div className="endpoint-model__capabilities">
+                        {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
+                          const limit = index < ENDPOINT_LIMITS.length;
+                          const manual = m.manual?.[field];
+                          const auto = discoveredNumber(m, field);
+                          const invalid =
+                            manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
+                          const label = t(numberFieldLabel(field));
+                          return (
+                            <Field
+                              key={field}
+                              label={label}
+                              id={`${ids}-${m.id}-${field}`}
+                              error={
+                                invalid
+                                  ? t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")
+                                  : undefined
+                              }
+                              labelAside={
+                                manual === undefined ? undefined : (
+                                  <button
+                                    type="button"
+                                    className="ac-link ac-link--muted small"
+                                    aria-label={`${label} · ${t("endpoint.capabilities.reset")}`}
+                                    onClick={() => setManual(m, { ...m.manual, [field]: undefined })}
+                                  >
+                                    {t("endpoint.capabilities.manual")} · {t("endpoint.capabilities.reset")}
+                                  </button>
+                                )
+                              }
+                            >
+                              <Input
+                                value={manual ?? auto ?? ""}
+                                inputMode={limit ? "numeric" : "decimal"}
+                                placeholder={t("endpoint.capabilities.unknown")}
+                                aria-label={
+                                  field === "input" || field === "output"
+                                    ? t(field === "input" ? "endpoint.priceIn" : "endpoint.priceOut", { model: m.id })
+                                    : `${m.id} · ${label}`
+                                }
+                                onChange={(e) => setManual(m, editNumber(m, field, e.target.value))}
+                              />
+                            </Field>
+                          );
+                        })}
+                        {ENDPOINT_ATTACHMENTS.map((field) => {
+                          const auto = m.discovered?.[field]?.value;
+                          const manual = m.manual?.[field];
+                          const label = t(`endpoint.capabilities.${field}`);
+                          return (
+                            <Field key={field} label={label} group>
+                              <Segmented
+                                label={`${m.id} · ${label}`}
+                                value={manual === undefined ? "auto" : String(manual)}
+                                options={[
+                                  { value: "auto", label: t("endpoint.capabilities.automatic") },
+                                  { value: "true", label: t("endpoint.capabilities.yes") },
+                                  { value: "false", label: t("endpoint.capabilities.no") },
+                                ]}
+                                onValueChange={(value) =>
+                                  setManual(m, {
+                                    ...m.manual,
+                                    [field]: value === "auto" ? undefined : value === "true",
+                                  })
+                                }
+                              />
+                              <span className="ac-field__example">
+                                {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
+                              </span>
+                            </Field>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -368,7 +483,7 @@ export function EndpointForm({
               {t("common.cancel")}
             </Button>
           )}
-          <Button variant="primary" loading={saving} disabled={!ready || saving} onClick={save}>
+          <Button variant="primary" loading={saving} disabled={!ready || locked} onClick={save}>
             {t(editing ? "endpoint.saveModels" : "endpoint.save")}
           </Button>
         </Foot>

@@ -1,4 +1,4 @@
-import type { ModelRequest, ModelUsage } from "./types";
+import type { AttachmentReads, ModelRequest, ModelUsage } from "./types";
 
 /**
  * Prices in nano-USD per token (1e-9 USD), i.e. USD per million tokens × 1000,
@@ -118,6 +118,8 @@ export interface ModelInfo {
   tier?: ModelTier;
   /** Context window in tokens (prompt + output); absent = `DEFAULT_CONTEXT_WINDOW`. */
   contextWindow?: number;
+  /** Tool attachment formats this connection is known to read. */
+  reads?: AttachmentReads;
   /** The most output tokens one call may ask for; the gateway caps each call at it. */
   maxOutputTokens?: number;
   /**

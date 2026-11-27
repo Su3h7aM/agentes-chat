@@ -273,7 +273,8 @@ export interface FakeState {
   /** Its `params`: the provider's name and words. */
   keyRefusalParams?: Record<string, unknown>;
   /** What an endpoint lists (ADR 0146); absent: nothing. */
-  endpointList?: { baseURL: string; models: { id: string }[]; error?: string };
+  endpointList?: Awaited<ReturnType<ApiClient["agents"]["endpointModels"]>>;
+  endpointProbe?: Awaited<ReturnType<ApiClient["agents"]["probeEndpoint"]>>;
   /** The coding plans' models as the server read them from their makers' lists; absent: an older server. */
   planModels?: Partial<Record<string, readonly PlanModel[]>>;
   /** Each model's test result when an endpoint is saved; absent: `ok`. */
@@ -3018,11 +3019,26 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
         return { ...cred, ...(checks ? { checks } : {}) };
       },
       endpointModels: async (orgId, input) => {
-        log("agents.endpointModels", orgId, { ...input, apiKey: "[redacted]" });
-        return state.endpointList ?? { baseURL: input.baseURL, models: [] };
+        const saved = "credentialId" in input ? state.credentials.find((c) => c.id === input.credentialId) : undefined;
+        log("agents.endpointModels", orgId, "credentialId" in input ? input : { ...input, apiKey: "[redacted]" });
+        return (
+          state.endpointList ?? {
+            baseURL: "baseURL" in input ? input.baseURL : (saved?.endpoint?.baseURL ?? ""),
+            models: [],
+          }
+        );
+      },
+      probeEndpoint: async (orgId, credentialId, input) => {
+        log("agents.probeEndpoint", orgId, credentialId, input);
+        const key = state.credentials.find((c) => c.id === credentialId);
+        if (key?.endpoint && state.endpointProbe)
+          key.endpoint = { ...key.endpoint, models: state.endpointProbe.models };
+        return { models: key?.endpoint?.models ?? [] };
       },
       setEndpointModels: async (orgId, credentialId, models) => {
         log("agents.setEndpointModels", orgId, credentialId, models);
+        const key = state.credentials.find((c) => c.id === credentialId);
+        if (key?.endpoint) key.endpoint = { ...key.endpoint, models };
         return { models, checks: models.map((m) => ({ model: m.id, check: "ok" as const })) };
       },
       rotateCredential: async (orgId, credentialId, input) => {

@@ -155,6 +155,8 @@ import type {
   EmailChange,
   EndpointCheck,
   EndpointModel,
+  EndpointModelList,
+  EndpointProbe,
   EndpointStyle,
   FeedbackFile,
   FeedbackInput,
@@ -939,11 +941,12 @@ export interface ApiClient {
         endpoint?: { style: EndpointStyle; baseURL: string; models: EndpointModel[] };
       },
     ): Promise<Credential & { checks?: EndpointCheck[] }>;
-    /** What an endpoint lists before it is saved (admins): its address as stored, its models, or why none. */
+    /** List models and capabilities using new connection details or the saved credential. */
     endpointModels(
       orgId: string,
-      input: { style: EndpointStyle; baseURL: string; apiKey?: string },
-    ): Promise<{ baseURL: string; models: { id: string; label?: string }[]; error?: string }>;
+      input: { credentialId: string } | { style: EndpointStyle; baseURL: string; apiKey?: string },
+    ): Promise<EndpointModelList>;
+    probeEndpoint(orgId: string, credentialId: string, input: EndpointProbe): Promise<{ models: EndpointModel[] }>;
     /** Changes an endpoint's models and prices, then tests each again. */
     setEndpointModels(
       orgId: string,

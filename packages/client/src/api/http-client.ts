@@ -114,6 +114,7 @@ import type {
   EmailChange,
   EndpointCheck,
   EndpointModel,
+  EndpointModelList,
   FeedbackFile,
   FeedbackOffer,
   FileConversationRef,
@@ -994,10 +995,9 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
       addCredential: (orgId, input) =>
         request<Credential & { checks?: EndpointCheck[] }>(`${org(orgId)}/credentials`, { json: input }),
       endpointModels: (orgId, input) =>
-        request<{ baseURL: string; models: { id: string; label?: string }[]; error?: string }>(
-          `${org(orgId)}/credentials/endpoint-models`,
-          { json: input },
-        ),
+        request<EndpointModelList>(`${org(orgId)}/credentials/endpoint-models`, { json: input }),
+      probeEndpoint: (orgId, id, input) =>
+        request<{ models: EndpointModel[] }>(`${org(orgId)}/credentials/${enc(id)}/probe`, { json: input }),
       setEndpointModels: (orgId, id, models) =>
         request<{ models: EndpointModel[]; checks: EndpointCheck[] }>(`${org(orgId)}/credentials/${enc(id)}/models`, {
           method: "PUT",

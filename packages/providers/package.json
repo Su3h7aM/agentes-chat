@@ -12,6 +12,7 @@
     "./cli-floors": "./src/cli-floors.ts",
     "./cli-pins": "./src/cli-pins.ts",
     "./decision-endpoint": "./src/decision-endpoint.ts",
+    "./endpoint-discovery": "./src/endpoint-discovery.ts",
 
     "./context-limits": "./src/context-limits.ts",
     "./images": "./src/images.ts",

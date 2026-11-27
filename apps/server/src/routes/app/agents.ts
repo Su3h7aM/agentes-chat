@@ -29,6 +29,7 @@ import {
   createProposedRoutine,
   createTeam,
   decideCostlyProposal,
+  decryptCredential,
   deleteAgent,
   deleteAgentGroup,
   deleteCredential,
@@ -61,6 +62,7 @@ import {
   orgRouting,
   pickerEndpoint,
   pickerModels,
+  probeEndpoint,
   proposeChannelMove,
   publishAgentsChanged,
   publishMachineAgentsChanged,
@@ -83,6 +85,7 @@ import {
   usageQueue,
   usageSummary,
   useTeamTemplate,
+  ValidationError,
 } from "@agenteschat/engine";
 import { contextWindowOf, nanoUsdToUsd, pricesAt, usdToNanoUsd } from "@agenteschat/providers";
 import { learnedPlanModels } from "@agenteschat/providers/plans";
@@ -552,29 +555,45 @@ export function agentRoutes(deps: AppDeps) {
       request: {
         params: OrgParams,
         body: body(
-          z.object({
-            style: EndpointStyle,
-            baseURL: z.string().min(1).max(500),
-            apiKey: z.string().max(500).optional(),
-          }),
+          z.union([
+            z.object({ credentialId: z.uuid() }),
+            z.object({
+              style: EndpointStyle,
+              baseURL: z.string().min(1).max(500),
+              apiKey: z.string().max(500).optional(),
+            }),
+          ]),
         ),
       },
       responses: {
         200: json(
           z.object({
             baseURL: z.string().openapi({ description: "The address as it will be stored." }),
-            models: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+            models: z.array(EndpointModel.pick({ id: true, label: true, discovered: true })),
             error: z.string().optional(),
           }),
         ),
         ...errors,
       },
     }),
-    async (c) =>
-      c.json(
-        await listEndpoint(db, c.get("user").id, c.req.valid("param").orgId, c.req.valid("json"), endpointNet(deps)),
-        200,
-      ),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      const userId = c.get("user").id;
+      const input = c.req.valid("json");
+      const source =
+        "credentialId" in input
+          ? await (async () => {
+              await requirePermission(db, userId, orgId, "manage_credentials");
+              const saved = await decryptCredential(db, keyWrappers, orgId, input.credentialId);
+              if (saved?.provider !== "custom" || !saved.options?.endpoint)
+                throw new NotFoundError("Credential not found");
+              const { style, baseURL } = saved.options.endpoint;
+              return { style, baseURL, apiKey: saved.apiKey };
+            })()
+          : input;
+      const listed = await listEndpoint(db, userId, orgId, source, endpointNet(deps));
+      return c.json({ ...listed, models: listed.models.map(modelOut) }, 200);
+    },
   );
 
   app.openapi(
@@ -660,6 +679,32 @@ export function agentRoutes(deps: AppDeps) {
       const gateway = await keyTester(deps, userId);
       if (!gateway) return c.json({ check: "unchecked" as const }, 200);
       return c.json({ check: await checkCredential(db, gateway, userId, orgId, credentialId) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/organizations/{orgId}/credentials/{credentialId}/probe",
+      tags,
+      security,
+      summary: "Test an endpoint's image and PDF support (admins)",
+      request: {
+        params: OrgParams.extend({ credentialId: z.uuid() }),
+        body: body(
+          z.object({ models: z.array(z.string().max(200)).max(100).optional(), force: z.boolean().optional() }),
+        ),
+      },
+      responses: { 200: json(z.object({ models: z.array(EndpointModel) })), ...errors },
+    }),
+    async (c) => {
+      const { orgId, credentialId } = c.req.valid("param");
+      const userId = c.get("user").id;
+      await requirePermission(db, userId, orgId, "manage_credentials");
+      const gateway = await keyTester(deps, userId);
+      if (!gateway) throw new ValidationError("The model gateway is unavailable");
+      const models = await probeEndpoint(db, gateway, userId, orgId, credentialId, c.req.valid("json"));
+      return c.json({ models: models.map(modelOut) }, 200);
     },
   );
 

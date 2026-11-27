@@ -179,6 +179,8 @@ export interface OrgCall {
   outputSchema?: Record<string, unknown>;
   /** Tools the model may call (an endpoint's test call, ADR 0146); none run here. */
   tools?: ToolSpec[];
+  /** Attachment types forced only by a custom endpoint capability probe. */
+  endpointReads?: ModelInfo["reads"];
   effort?: ModelRequest["effort"];
   /** Agent the call is about, if any (recorded, not billed to its budget). */
   agentId?: string | null;
@@ -956,7 +958,7 @@ export function createModelGateway(deps: ModelGatewayDeps) {
           workspaceId: key.workspaceId,
           organization: key.organization,
           project: key.project,
-          endpoint: key.endpoint,
+          endpoint: key.endpoint && { ...key.endpoint, reads: info.reads },
           ...(call.session ? { session: call.session } : {}),
           onDelta: call.onDelta,
           ...(call.onNote ? { onNote: call.onNote } : {}),
@@ -1395,7 +1397,7 @@ export function createModelGateway(deps: ModelGatewayDeps) {
         result = await provider.stream(request, {
           apiKey: key.apiKey,
           workspaceId: key.workspaceId,
-          endpoint: key.endpoint,
+          endpoint: key.endpoint && { ...key.endpoint, reads: call.endpointReads ?? info.reads },
           onDelta: () => {},
         });
       } catch (error) {

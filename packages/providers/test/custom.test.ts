@@ -348,7 +348,7 @@ describe("calls", () => {
     expect((error as ProviderError).message).toContain("model llama-9 not found");
   });
 
-  test("a tool result's image goes to Claude on an Anthropic-compatible endpoint, never to another company's model", async () => {
+  test("Anthropic-compatible models send attachments only with explicit capabilities", async () => {
     const reply = sse([
       {
         type: "message_start",
@@ -375,32 +375,133 @@ describe("calls", () => {
             type: "tool_result" as const,
             toolUseId: "t1",
             content: "shot.png",
-            images: [{ mediaType: "image/png", data: "UE5H" }],
+            images: [
+              { mediaType: "image/png", data: "UE5H" },
+              { mediaType: "application/pdf", data: "UERG" },
+            ],
           },
         ],
       },
     ];
-    const send = async (model: string) => {
+    const send = async (model: string, reads?: { image?: boolean; pdf?: boolean }) => {
       const { fetcher, requests } = scripted(reply);
       const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
         { model: customModelId(CRED, model), system: "s", messages, maxTokens: 100 },
         {
           apiKey: "k-123456789",
-          endpoint: { style: "anthropic", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic" },
+          endpoint: { style: "anthropic", baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic", reads },
           onDelta() {},
         },
       );
       return { body: JSON.stringify(requests[0]?.body.messages), leftOut: result.imagesLeftOut };
     };
     const claude = await send("global.anthropic.claude-sonnet-5-5");
-    expect(claude.body).toContain('"type":"image"');
-    expect(claude.leftOut).toBeUndefined();
+    expect(claude.body).not.toContain('"type":"image"');
+    expect(claude.body).not.toContain('"type":"document"');
+    expect(claude.leftOut).toBe(true);
+    const deepseek = await send("deepseek-flash");
+    expect(deepseek.body).not.toContain('"type":"image"');
+    expect(deepseek.body).not.toContain('"type":"document"');
+    expect(deepseek.leftOut).toBe(true);
+    const enabled = await send("global.anthropic.claude-sonnet-5-5", { image: true, pdf: true });
+    expect(enabled.body).toContain('"type":"image"');
+    expect(enabled.body).toContain('"type":"document"');
+    expect(enabled.leftOut).toBeUndefined();
     const other = await send("moonshotai.kimi-k2.5");
     expect(other.leftOut).toBe(true);
     expect(other.body).not.toContain('"type":"image"');
-    expect(other.body).toContain(
-      "The picture is not shown to you: this agent's AI (moonshotai.kimi-k2.5) reads text only",
+    expect(other.body).toContain("The picture and the PDF are not shown");
+    const imageOnly = await send("moonshotai.kimi-k2.5", { image: true });
+    expect(imageOnly.body).toContain('"type":"image"');
+    expect(imageOnly.body).not.toContain('"type":"document"');
+    expect(imageOnly.body).toContain("The PDF is not shown");
+    expect(imageOnly.leftOut).toBe(true);
+    const disabled = await send("global.anthropic.claude-sonnet-5-5", { image: false, pdf: false });
+    expect(disabled.body).not.toContain('"type":"image"');
+    expect(disabled.leftOut).toBe(true);
+  });
+
+  test("unknown Chat Completions attachments are text-only until manually enabled", async () => {
+    const messages = [
+      { role: "user" as const, content: "read the files" },
+      { role: "assistant" as const, content: [{ type: "tool_use" as const, id: "t1", name: "read_file", input: {} }] },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "tool_result" as const,
+            toolUseId: "t1",
+            content: "files",
+            images: [
+              { mediaType: "image/png", data: "UE5H" },
+              { mediaType: "application/pdf", data: "UERG" },
+            ],
+          },
+        ],
+      },
+    ];
+    const send = async (reads?: { image?: boolean; pdf?: boolean }) => {
+      const { fetcher, requests } = scripted(chat([{ choices: [{ delta: {}, finish_reason: "stop" }] }]));
+      const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+        { model: id, system: "s", maxTokens: 100, messages },
+        { apiKey: "unused", endpoint: { style: "openai", baseURL: "https://gw.example/v1", reads }, onDelta() {} },
+      );
+      return { body: JSON.stringify(requests[0]?.body.messages), leftOut: result.imagesLeftOut };
+    };
+    const unknown = await send();
+    expect(unknown.body).not.toContain('"type":"image_url"');
+    expect(unknown.body).not.toContain('"type":"file"');
+    expect(unknown.leftOut).toBe(true);
+    const enabled = await send({ image: true, pdf: true });
+    expect(enabled.body).toContain('"type":"image_url"');
+    expect(enabled.body).toContain('"type":"file"');
+    expect(enabled.leftOut).toBeUndefined();
+  });
+
+  test("compatible Chat Completions sends enabled attachments after all tool replies", async () => {
+    const { fetcher, requests } = scripted(chat([{ choices: [{ delta: {}, finish_reason: "stop" }] }]));
+    const attachments = [
+      { mediaType: "image/png", data: "UE5H" },
+      { mediaType: "application/pdf", data: "UERG", name: "report.pdf" },
+    ];
+    const toolIds = ["t1", "t2"];
+    const result = await createCustomProvider({ fetch: fetcher, maxRetries: 0 }).stream(
+      {
+        model: id,
+        system: "s",
+        maxTokens: 100,
+        messages: [
+          { role: "user", content: "read the files" },
+          { role: "assistant", content: toolIds.map((id) => ({ type: "tool_use", id, name: "read_file", input: {} })) },
+          {
+            role: "user",
+            content: attachments.map((attachment, index) => ({
+              type: "tool_result",
+              toolUseId: `t${index + 1}`,
+              content: `file ${index + 1}`,
+              images: [attachment],
+            })),
+          },
+        ],
+      },
+      {
+        apiKey: "unused",
+        endpoint: { style: "openai", baseURL: "https://gw.example/v1", reads: { image: true, pdf: true } },
+        onDelta() {},
+      },
     );
+    expect((requests[0]?.body.messages as unknown[] | undefined)?.slice(-3)).toEqual([
+      { role: "tool", tool_call_id: "t1", content: "file 1" },
+      { role: "tool", tool_call_id: "t2", content: "file 2" },
+      {
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: "data:image/png;base64,UE5H" } },
+          { type: "file", file: { filename: "report.pdf", file_data: "data:application/pdf;base64,UERG" } },
+        ],
+      },
+    ]);
+    expect(result.imagesLeftOut).toBeUndefined();
   });
 
   test("tool calls without an index, or with object arguments, stay apart and readable", async () => {
@@ -467,4 +568,148 @@ describe("calls", () => {
     );
     await expect(call).rejects.toThrow("no endpoint");
   });
+});
+
+test("model discovery reads explicit capabilities and leaves absent metadata unknown", () => {
+  expect(
+    parseEndpointModels({
+      data: [
+        {
+          id: "gateway/model",
+          context_length: 128000,
+          top_provider: { max_completion_tokens: 4096 },
+          architecture: { input_modalities: ["text", "image"] },
+          pricing: { prompt: "0", completion: "0.0000025", input_cache_read: "0.00000025", input_cache_write: "NaN" },
+        },
+        { id: "ids-only", context_window: -1, input_modalities: [], pricing: { prompt: "", completion: -1 } },
+      ],
+    }),
+  ).toEqual([
+    {
+      id: "gateway/model",
+      caps: {
+        limits: { contextWindow: 128000, maxOutputTokens: 4096 },
+        prices: { input: 0, output: 2.5, cacheRead: 0.25 },
+        image: true,
+        pdf: false,
+      },
+    },
+    { id: "ids-only" },
+  ]);
+});
+
+test("OpenRouter file input is PDF support", () => {
+  const [model] = parseEndpointModels(
+    { data: [{ id: "m", architecture: { input_modalities: ["text", "file"] } }] },
+    { fileIsPdf: true },
+  );
+  expect(model?.caps?.pdf).toBe(true);
+});
+
+test("discovery merges per field by source and timestamp, preserving zero and false", async () => {
+  const { mergeEndpointDiscovery } = await import("../src/endpoint-discovery");
+  const old = "2026-01-01T00:00:00.000Z";
+  const recent = "2026-02-01T00:00:00.000Z";
+  expect(
+    mergeEndpointDiscovery(
+      {
+        contextWindow: { value: 4096, source: "endpoint", discoveredAt: old },
+        image: { value: true, source: "probe", discoveredAt: old },
+        prices: { input: { value: 2, source: "catalog", discoveredAt: old } },
+      },
+      {
+        contextWindow: { value: 8192, source: "catalog", discoveredAt: recent },
+        image: { value: false, source: "probe", discoveredAt: recent },
+        prices: { input: { value: 0, source: "catalog", discoveredAt: recent } },
+      },
+    ),
+  ).toEqual({
+    contextWindow: { value: 4096, source: "endpoint", discoveredAt: old },
+    image: { value: false, source: "probe", discoveredAt: recent },
+    prices: { input: { value: 0, source: "catalog", discoveredAt: recent } },
+  });
+});
+
+test("legacy grouped discovery preserves sources and original dates", async () => {
+  const { normalizeEndpointDiscovery } = await import("../src/endpoint-discovery");
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  expect(
+    normalizeEndpointDiscovery({
+      discoveredAt,
+      limits: { source: "endpoint", value: { contextWindow: 100 } },
+      prices: { source: "endpoint", value: { input: 0 } },
+      image: { source: "probe", value: false },
+    }),
+  ).toEqual({
+    contextWindow: { source: "endpoint", value: 100, discoveredAt },
+    prices: { input: { source: "endpoint", value: 0, discoveredAt } },
+    image: { source: "probe", value: false, discoveredAt },
+  });
+});
+
+test("incomplete modality lists report only positive attachment capabilities", () => {
+  const models = parseEndpointModels({
+    data: [
+      { id: "image-only", input_modalities: ["image"] },
+      { id: "file-only", architecture: { input_modalities: ["file"] } },
+      { id: "complete", input_modalities: ["text"] },
+    ],
+  });
+  expect(models[0]?.caps).toEqual({ image: true });
+  expect(models[1]?.caps).toBeUndefined();
+  expect(models[2]?.caps).toEqual({ image: false, pdf: false });
+});
+
+test("mixed discovery and future fields survive normalization and merge", async () => {
+  const { mergeEndpointDiscovery } = await import("../src/endpoint-discovery");
+  const date = "2026-01-01T00:00:00.000Z";
+  const input = {
+    discoveredAt: date,
+    limits: { source: "endpoint" as const, value: { contextWindow: 100 } },
+    contextWindow: { value: 200, source: "probe" as const, discoveredAt: date },
+    future: { retained: true },
+    prices: { input: { value: 0, source: "endpoint" as const, discoveredAt: date }, futurePrice: { value: 5 } },
+  };
+  expect(mergeEndpointDiscovery(input, { image: { value: false, source: "probe", discoveredAt: date } })).toMatchObject(
+    {
+      contextWindow: input.contextWindow,
+      future: input.future,
+      prices: input.prices,
+      image: { value: false, source: "probe", discoveredAt: date },
+    },
+  );
+});
+
+test("legacy grouped prices preserve unrecognized price fields", async () => {
+  const { normalizeEndpointDiscovery } = await import("../src/endpoint-discovery");
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const value = { discoveredAt, prices: { source: "endpoint" as const, value: { input: 1, futurePrice: 9 } } };
+  expect(normalizeEndpointDiscovery(value)).toMatchObject({
+    prices: {
+      input: { value: 1, source: "endpoint", discoveredAt },
+      futurePrice: { value: 9, source: "endpoint", discoveredAt },
+    },
+  });
+});
+
+test("file modality is PDF only for the OpenRouter host", async () => {
+  const body = {
+    data: [
+      { id: "m", input_modalities: ["file"] },
+      { id: "p", input_modalities: ["pdf"] },
+      { id: "mixed", input_modalities: ["text", "file"] },
+    ],
+  };
+  const http = (async () => Response.json(body)) as unknown as typeof fetch;
+  const generic = await listEndpointModels({ style: "openai", baseURL: "https://gateway.example/v1" }, "key", http);
+  const openrouter = await listEndpointModels(
+    { style: "openai", baseURL: "https://openrouter.ai/api/v1" },
+    "key",
+    http,
+  );
+  expect(generic[0]?.caps).toBeUndefined();
+  expect(generic[1]?.caps?.pdf).toBe(true);
+  expect(openrouter[0]?.caps?.pdf).toBe(true);
+  expect(generic[2]?.caps).toEqual({ image: false, pdf: false });
+  expect(openrouter[2]?.caps).toEqual({ image: false, pdf: true });
 });

@@ -14,6 +14,7 @@ export * from "./context-limits";
 export * from "./custom";
 export * from "./decision-endpoint";
 export * from "./embeddings";
+export * from "./endpoint-discovery";
 export * from "./gemini";
 export * from "./images";
 export * from "./key-check";

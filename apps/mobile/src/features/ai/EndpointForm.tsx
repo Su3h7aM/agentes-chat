@@ -1,18 +1,30 @@
-import { type Credential, type EndpointCheck, keys, useApi } from "@agenteschat/client";
+import { type Credential, type EndpointCheck, keys, useApi, useProbeEndpoint } from "@agenteschat/client";
 import {
+  attachmentLabel,
+  attachmentValue,
   CHECK_VIEW,
   CUSTOM_PROVIDER,
   checksInOrder,
+  discoveredNumber,
+  draftOfEndpoint,
+  ENDPOINT_ATTACHMENTS,
+  ENDPOINT_LIMITS,
+  ENDPOINT_PRICES,
   ENDPOINT_SEARCH_FROM,
   ENDPOINT_STYLES,
   type EndpointDraft,
+  editNumber,
   emptyEndpointDraft,
   endpointAddressLooksValid,
   endpointBaseExample,
   endpointModelsOf,
   endpointReady,
   modelsShown,
-  pricesProblem,
+  modelUnpricedInDraft,
+  numberFieldLabel,
+  parseLimit,
+  parsePrice,
+  pendingAttachments,
   withChecks,
   withListedModels,
   withoutModel,
@@ -46,10 +58,12 @@ import { Note } from "./parts";
  */
 export function EndpointForm({
   orgId,
+  credential,
   onDone,
   onCancel,
 }: {
   orgId: string;
+  credential?: Credential;
   onDone: (saved: Credential) => void | Promise<void>;
   onCancel?: () => void;
 }) {
@@ -57,7 +71,22 @@ export function EndpointForm({
   const { colors: c } = useTheme();
   const api = useApi();
   const qc = useQueryClient();
-  const [draft, setDraft] = useState<EndpointDraft>(emptyEndpointDraft);
+  const probe = useProbeEndpoint(orgId);
+  const testAttachments = (credentialId: string, models: string[], force?: true) =>
+    probe.mutate(
+      { credentialId, models, ...(force ? { force } : {}) },
+      {
+        onSuccess: (result) =>
+          setSaved((current) => {
+            const endpoint = current?.key.endpoint;
+            if (!current || !endpoint) return current;
+            return { ...current, key: { ...current.key, endpoint: { ...endpoint, models: result.models } } };
+          }),
+      },
+    );
+  const [draft, setDraft] = useState<EndpointDraft>(() =>
+    credential?.endpoint ? draftOfEndpoint(credential.label, credential.endpoint) : emptyEndpointDraft(),
+  );
   const [typed, setTyped] = useState("");
   const [typedWrong, setTypedWrong] = useState(false);
   const [listing, setListing] = useState(false);
@@ -84,11 +113,16 @@ export function EndpointForm({
     setListing(true);
     setListError(null);
     try {
-      const r = await api.agents.endpointModels(orgId, {
-        style: draft.style,
-        baseURL: draft.baseURL.trim(),
-        apiKey: draft.apiKey.trim() || undefined,
-      });
+      const r = await api.agents.endpointModels(
+        orgId,
+        credential
+          ? { credentialId: credential.id }
+          : {
+              style: draft.style,
+              baseURL: draft.baseURL.trim(),
+              apiKey: draft.apiKey.trim() || undefined,
+            },
+      );
       setDraft((d) => ({ ...withListedModels(d, r.models), baseURL: r.baseURL }));
       setListError(r.error ?? null);
     } catch (error) {
@@ -110,13 +144,26 @@ export function EndpointForm({
     setSaving(true);
     setFailed(false);
     try {
-      const { checks, ...key } = await api.agents.addCredential(orgId, {
-        provider: CUSTOM_PROVIDER,
-        label: draft.name.trim(),
-        apiKey: draft.apiKey.trim(),
-        endpoint: { style: draft.style, baseURL: draft.baseURL.trim(), models },
-      });
-      setSaved({ key, checks: checks ?? [] });
+      let key: Credential;
+      let checks: EndpointCheck[];
+      if (credential?.endpoint) {
+        const result = await api.agents.setEndpointModels(orgId, credential.id, models);
+        key = { ...credential, endpoint: { ...credential.endpoint, models: result.models } };
+        checks = result.checks;
+      } else {
+        const { checks: result, ...added } = await api.agents.addCredential(orgId, {
+          provider: CUSTOM_PROVIDER,
+          label: draft.name.trim(),
+          apiKey: draft.apiKey.trim(),
+          endpoint: { style: draft.style, baseURL: draft.baseURL.trim(), models },
+        });
+        key = added;
+        checks = result ?? [];
+      }
+      const checked = withChecks(key, checks);
+      setSaved({ key: checked, checks });
+      const pending = checked.endpoint?.models.filter((m) => pendingAttachments(m).length).map((m) => m.id);
+      if (pending?.length) testAttachments(key.id, pending);
       await qc.invalidateQueries({ queryKey: keys.credentials(orgId) });
       void qc.invalidateQueries({ queryKey: keys.models });
     } catch {
@@ -127,6 +174,7 @@ export function EndpointForm({
   };
 
   if (saved) {
+    const models = saved.key.endpoint?.models ?? [];
     return (
       <View style={styles.gap}>
         {saved.key.reused ? (
@@ -146,6 +194,36 @@ export function EndpointForm({
             />
           ))}
         </GroupedList>
+        {models.map((model) => (
+          <GroupedList key={model.id}>
+            {ENDPOINT_ATTACHMENTS.map((field) => {
+              const testing =
+                probe.isPending &&
+                probe.variables.models?.includes(model.id) &&
+                pendingAttachments(model, probe.variables.force).includes(field);
+              return (
+                <GroupedRow
+                  key={field}
+                  label={`${model.id} · ${t(`endpoint.capabilities.${field}`)}`}
+                  value={t(testing ? "endpoint.capabilities.testing" : attachmentLabel(attachmentValue(model, field)))}
+                />
+              );
+            })}
+            <GroupedRow
+              label={t("endpoint.capabilities.retest")}
+              onPress={
+                probe.isPending || !pendingAttachments(model, true).length
+                  ? undefined
+                  : () => testAttachments(saved.key.id, [model.id], true)
+              }
+            />
+          </GroupedList>
+        ))}
+        {probe.isError && (
+          <Note icon="x" live inset>
+            {t("endpoint.capabilities.failed")}
+          </Note>
+        )}
         <Button
           variant="primary"
           wide
@@ -155,7 +233,7 @@ export function EndpointForm({
           onPress={async () => {
             setClosing(true);
             try {
-              await onDone(withChecks(saved.key, saved.checks));
+              await onDone(saved.key);
             } finally {
               setClosing(false);
             }
@@ -167,62 +245,64 @@ export function EndpointForm({
 
   return (
     <View style={styles.gap}>
-      <Locked when={locked} style={styles.gap}>
-        <GroupedList>
-          <GroupedField label={t("endpoint.name")}>
-            <TextInput
-              value={draft.name}
-              onChangeText={(name) => set({ name })}
-              placeholder={t("endpoint.namePlaceholder")}
-              placeholderTextColor={c.faint}
-              maxLength={80}
-              autoCorrect={false}
-              accessibilityLabel={t("endpoint.name")}
-              style={input}
+      {!credential && (
+        <Locked when={locked} style={styles.gap}>
+          <GroupedList>
+            <GroupedField label={t("endpoint.name")}>
+              <TextInput
+                value={draft.name}
+                onChangeText={(name) => set({ name })}
+                placeholder={t("endpoint.namePlaceholder")}
+                placeholderTextColor={c.faint}
+                maxLength={80}
+                autoCorrect={false}
+                accessibilityLabel={t("endpoint.name")}
+                style={input}
+              />
+            </GroupedField>
+          </GroupedList>
+          <View>
+            <GroupedHeader>{t("endpoint.style")}</GroupedHeader>
+            <Segmented
+              wide="fit"
+              items={ENDPOINT_STYLES.map((s) => ({ key: s, label: t(`endpoint.styles.${s}`) }))}
+              value={draft.style}
+              onChange={(style) => set({ style: style as EndpointDraft["style"] })}
             />
-          </GroupedField>
-        </GroupedList>
-        <View>
-          <GroupedHeader>{t("endpoint.style")}</GroupedHeader>
-          <Segmented
-            wide="fit"
-            items={ENDPOINT_STYLES.map((s) => ({ key: s, label: t(`endpoint.styles.${s}`) }))}
-            value={draft.style}
-            onChange={(style) => set({ style: style as EndpointDraft["style"] })}
-          />
-        </View>
-        <GroupedList>
-          <GroupedField label={t("endpoint.address")}>
-            <TextInput
-              value={draft.baseURL}
-              onChangeText={(baseURL) => set({ baseURL })}
-              placeholder={endpointBaseExample(draft.style)}
-              placeholderTextColor={c.faint}
-              keyboardType="url"
-              autoCapitalize="none"
-              autoCorrect={false}
-              spellCheck={false}
-              accessibilityLabel={t("endpoint.address")}
-              style={input}
-            />
-          </GroupedField>
-          <GroupedField
-            label={t("endpoint.key")}
-            hint={{ name: t("common.about", { label: t("endpoint.key") }), text: t("endpoint.keyHelp") }}
-          >
-            <TextInput
-              value={draft.apiKey}
-              onChangeText={(apiKey) => set({ apiKey })}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              accessibilityLabel={t("endpoint.key")}
-              style={input}
-            />
-          </GroupedField>
-        </GroupedList>
-        <GroupedFooter>{t("endpoint.addressHelp", { example: endpointBaseExample(draft.style) })}</GroupedFooter>
-      </Locked>
+          </View>
+          <GroupedList>
+            <GroupedField label={t("endpoint.address")}>
+              <TextInput
+                value={draft.baseURL}
+                onChangeText={(baseURL) => set({ baseURL })}
+                placeholder={endpointBaseExample(draft.style)}
+                placeholderTextColor={c.faint}
+                keyboardType="url"
+                autoCapitalize="none"
+                autoCorrect={false}
+                spellCheck={false}
+                accessibilityLabel={t("endpoint.address")}
+                style={input}
+              />
+            </GroupedField>
+            <GroupedField
+              label={t("endpoint.key")}
+              hint={{ name: t("common.about", { label: t("endpoint.key") }), text: t("endpoint.keyHelp") }}
+            >
+              <TextInput
+                value={draft.apiKey}
+                onChangeText={(apiKey) => set({ apiKey })}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel={t("endpoint.key")}
+                style={input}
+              />
+            </GroupedField>
+          </GroupedList>
+          <GroupedFooter>{t("endpoint.addressHelp", { example: endpointBaseExample(draft.style) })}</GroupedFooter>
+        </Locked>
+      )}
       <GroupedHeader
         aside={
           <Button
@@ -230,7 +310,7 @@ export function EndpointForm({
             size="sm"
             label={t("endpoint.fetch")}
             loading={listing}
-            disabled={saving || !endpointAddressLooksValid(draft.baseURL)}
+            disabled={locked || (!credential && !endpointAddressLooksValid(draft.baseURL))}
             onPress={() => void fetchModels()}
           />
         }
@@ -306,45 +386,77 @@ export function EndpointForm({
             )}
             {draft.models
               .filter((m) => m.on)
-              .map((m) => {
-                const problem = pricesProblem(m);
-                return (
-                  <View key={m.id} style={styles.gap}>
-                    <GroupedHeader>{`${m.id} · ${t("endpoint.priceUnit")}`}</GroupedHeader>
-                    <GroupedList>
-                      <GroupedField label={t("endpoint.priceInShort")}>
-                        <TextInput
-                          value={m.input}
-                          onChangeText={(v) => setModel(m.id, { input: v })}
-                          keyboardType="decimal-pad"
-                          accessibilityLabel={t("endpoint.priceIn", { model: m.id })}
-                          style={input}
-                        />
-                      </GroupedField>
-                      <GroupedField label={t("endpoint.priceOutShort")}>
-                        <TextInput
-                          value={m.output}
-                          onChangeText={(v) => setModel(m.id, { output: v })}
-                          keyboardType="decimal-pad"
-                          accessibilityLabel={t("endpoint.priceOut", { model: m.id })}
-                          style={input}
-                        />
-                      </GroupedField>
-                    </GroupedList>
-                    {problem ? (
-                      <GroupedFooter>
-                        <Text variant="footnote" tone="danger" accessibilityLiveRegion="polite">
-                          {t(problem === "both" ? "endpoint.priceBoth" : "endpoint.priceInvalid")}
-                        </Text>
-                      </GroupedFooter>
-                    ) : null}
-                  </View>
-                );
-              })}
+              .map((m) => (
+                <View key={m.id} style={styles.gap}>
+                  <GroupedHeader>{m.id}</GroupedHeader>
+                  <GroupedList>
+                    {[...ENDPOINT_LIMITS, ...ENDPOINT_PRICES].map((field, index) => {
+                      const limit = index < ENDPOINT_LIMITS.length;
+                      const manual = m.manual?.[field];
+                      const auto = discoveredNumber(m, field);
+                      const invalid =
+                        manual !== undefined && (limit ? parseLimit(manual) : parsePrice(manual)) === null;
+                      const label = t(numberFieldLabel(field));
+                      return (
+                        <GroupedField key={field} label={label} stacked>
+                          <TextInput
+                            value={manual ?? (auto === undefined ? "" : String(auto))}
+                            onChangeText={(v) => setModel(m.id, { manual: editNumber(m, field, v) })}
+                            keyboardType={limit ? "number-pad" : "decimal-pad"}
+                            placeholder={t("endpoint.capabilities.unknown")}
+                            placeholderTextColor={c.faint}
+                            accessibilityLabel={`${m.id} · ${label}`}
+                            style={input}
+                          />
+                          {manual !== undefined && (
+                            <Button
+                              variant="text"
+                              size="sm"
+                              label={`${t("endpoint.capabilities.manual")} · ${t("endpoint.capabilities.reset")}`}
+                              onPress={() => setModel(m.id, { manual: { ...m.manual, [field]: undefined } })}
+                            />
+                          )}
+                          {invalid && (
+                            <Text variant="footnote" tone="danger" accessibilityLiveRegion="polite">
+                              {t(limit ? "endpoint.capabilities.invalidLimit" : "endpoint.priceInvalid")}
+                            </Text>
+                          )}
+                        </GroupedField>
+                      );
+                    })}
+                    {ENDPOINT_ATTACHMENTS.map((field) => {
+                      const auto = m.discovered?.[field]?.value;
+                      const manual = m.manual?.[field];
+                      return (
+                        <GroupedField key={field} label={t(`endpoint.capabilities.${field}`)} stacked>
+                          <Segmented
+                            wide
+                            value={manual === undefined ? "auto" : String(manual)}
+                            items={[
+                              { key: "auto", label: t("endpoint.capabilities.automatic") },
+                              { key: "true", label: t("endpoint.capabilities.yes") },
+                              { key: "false", label: t("endpoint.capabilities.no") },
+                            ]}
+                            onChange={(value) =>
+                              setModel(m.id, {
+                                manual: { ...m.manual, [field]: value === "auto" ? undefined : value === "true" },
+                              })
+                            }
+                          />
+                          <Text variant="footnote">
+                            {t(manual === undefined ? attachmentLabel(auto) : "endpoint.capabilities.manual")}
+                          </Text>
+                        </GroupedField>
+                      );
+                    })}
+                  </GroupedList>
+                  <GroupedFooter>{t("endpoint.priceUnit")}</GroupedFooter>
+                </View>
+              ))}
           </>
         ) : null}
       </Locked>
-      {draft.models.some((m) => m.on && !m.input.trim() && !m.output.trim()) ? (
+      {draft.models.some((m) => m.on && modelUnpricedInDraft(m)) ? (
         <Note icon="info" inset>
           {t("endpoint.unpriced")}
         </Note>
@@ -357,7 +469,7 @@ export function EndpointForm({
       <Button
         variant="primary"
         wide
-        label={saving ? t("endpoint.testing") : t("endpoint.save")}
+        label={saving ? t("endpoint.testing") : t(credential ? "endpoint.saveModels" : "endpoint.save")}
         loading={saving}
         disabled={!endpointReady(draft) || listing}
         onPress={() => void save()}

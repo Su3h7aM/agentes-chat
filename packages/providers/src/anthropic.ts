@@ -107,7 +107,7 @@ export function createAnthropicProvider(
 
   return {
     id,
-    async stream(input, { apiKey, workspaceId, onDelta, onNote }): Promise<ModelResult> {
+    async stream(input, { endpoint, apiKey, workspaceId, onDelta, onNote }): Promise<ModelResult> {
       const request = laidOut(input);
       const info = MODEL_CATALOG[request.model];
       const fallback = !compat && info?.serverSideFallback === true;
@@ -141,9 +141,11 @@ export function createAnthropicProvider(
         outputTokens: null,
         outputChars: 0,
       };
-      const textOnly = Boolean(compat && !compat.images);
-      const pictures = textOnly && info?.images === true;
-      const leftOut = textOnly && hasToolImages(request.messages, lostWithoutImages(pictures));
+      const reads = compat
+        ? (endpoint?.reads ??
+          (id === "custom" ? {} : compat.images ? { image: true, pdf: true } : { image: info?.images === true }))
+        : undefined;
+      const leftOut = reads !== undefined && hasToolImages(request.messages, lostWithoutImages(reads));
       const updates = !compat && !thinkingOff && options.progressNotes !== false && info?.thinkingUpdates === true;
       const params = (withThinking: boolean) => {
         // `block_binding` is taken only with thinking on; the call made without thinking goes plain.
@@ -160,7 +162,7 @@ export function createAnthropicProvider(
           // Another company's endpoint (DeepSeek, Kimi, Z.ai, MiniMax) isn't trusted to take images, unless it or the
           // model's row (`images`) says it does.
           messages: toMessageParams(
-            textOnly ? withoutImages(request.messages, request.model, pictures) : request.messages,
+            reads ? withoutImages(request.messages, request.model, reads) : request.messages,
             id,
             withThinking,
             // Anthropic behind a compatible endpoint refuses a 1-hour breakpoint after the system's 5-minute ones.

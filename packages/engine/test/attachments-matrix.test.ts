@@ -195,7 +195,7 @@ function brains(): Brain[] {
     },
     {
       name: "Claude on a workspace endpoint",
-      reads: "all",
+      reads: "text",
       send: via(
         (fetch) => createCustomProvider({ fetch, maxRetries: 0 }),
         customModelId(CRED, "global.anthropic.claude-sonnet-5-5"),

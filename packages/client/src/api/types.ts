@@ -1003,12 +1003,47 @@ export interface EndpointPrices {
 /** The last test call of a model: it called a tool, answered without one, or failed. */
 export type EndpointCheckResult = "ok" | "no_tools" | "failed";
 
+export interface EndpointLimits {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+export interface EndpointOverrides extends EndpointLimits {
+  prices?: Partial<EndpointPrices>;
+  image?: boolean;
+  pdf?: boolean;
+}
+
+type EndpointDiscovery<T> = { value: T; source: "endpoint" | "catalog" | "probe"; discoveredAt: string };
+export type EndpointAttachment = "image" | "pdf";
+
+export interface EndpointDiscovered {
+  contextWindow?: EndpointDiscovery<number>;
+  maxOutputTokens?: EndpointDiscovery<number>;
+  prices?: Partial<Record<keyof EndpointPrices, EndpointDiscovery<number>>>;
+  image?: EndpointDiscovery<boolean>;
+  pdf?: EndpointDiscovery<boolean>;
+}
+
 export interface EndpointModel {
   id: string;
   label?: string;
-  /** Absent: unpriced (its calls cost 0, so no budget limits them). */
+  /** Legacy manual prices in USD per million tokens. */
   prices?: EndpointPrices;
+  overrides?: EndpointOverrides;
+  discovered?: EndpointDiscovered;
   check?: EndpointCheckResult;
+}
+
+export interface EndpointModelList {
+  baseURL: string;
+  models: Pick<EndpointModel, "id" | "label" | "discovered">[];
+  error?: string;
+}
+
+export interface EndpointProbe {
+  models?: string[];
+  force?: boolean;
 }
 
 export interface EndpointCheck {

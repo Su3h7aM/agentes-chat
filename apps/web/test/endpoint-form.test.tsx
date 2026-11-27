@@ -44,7 +44,6 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     expect(save().hasAttribute("disabled")).toBe(true);
     await click(within(add).getByRole("checkbox", { name: "llama-4" }));
     await type(within(add).getByLabelText("llama-4: preço de entrada"), "1");
-    expect(add.textContent).toContain("Preencha entrada e saída, ou nenhum dos dois.");
     await type(within(add).getByLabelText("llama-4: preço de saída"), "2,5");
     await type(within(add).getByLabelText("Adicionar um modelo"), "qwen-3");
     await click(within(add).getByRole("button", { name: "Adicionar" }));
@@ -59,13 +58,83 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
       endpoint: {
         style: "openai",
         baseURL: "https://gw.example/v1",
-        models: [{ id: "llama-4", prices: { input: 1, output: 2.5 } }, { id: "qwen-3" }],
+        models: [{ id: "llama-4", overrides: { prices: { input: 1, output: 2.5 } } }, { id: "qwen-3" }],
       },
     });
     expect(add.textContent).toContain("llama-4 · Funciona, com ferramentas");
     expect(add.textContent).toContain("qwen-3 · Responde, mas não usou ferramenta.");
     await click(within(add).getByRole("button", { name: "Concluir" }));
     expect(screen().queryByRole("dialog", { name: "Adicionar chave de API" })).toBeNull();
+  });
+
+  test("refreshes a saved catalog, restores a legacy price and tests attachments", async () => {
+    const model = { id: "model-a", prices: { input: 1, output: 2 }, overrides: { image: false } };
+    const discoveredAt = "2026-11-01T10:00:00.000Z";
+    const discovery = { prices: { input: { source: "endpoint" as const, value: 0, discoveredAt } } };
+    const state = seedState({
+      credentials: [
+        {
+          id: "saved-gw",
+          provider: "custom",
+          label: "My gateway",
+          keyHint: "4567",
+          endpoint: { style: "openai", baseURL: "https://gw.example/v1", models: [model] },
+          createdAt: discoveredAt,
+          revokedAt: null,
+        },
+      ],
+      endpointList: { baseURL: "https://gw.example/v1", models: [{ id: model.id, discovered: discovery }] },
+    });
+    await renderApp(`/org/${ORG_ID}/settings/keys`, { api: createFakeApi(state) });
+    await settle(5);
+    await click(screen().getByRole("button", { name: "Modelos" }));
+    const dialog = screen().getByRole("dialog", { name: "Modelos de My gateway" });
+    await click(within(dialog).getByRole("button", { name: "Buscar modelos" }));
+    expect(state.calls.find((c) => c.method === "agents.endpointModels")?.args[1]).toEqual({
+      credentialId: "saved-gw",
+    });
+    await click(within(dialog).getByRole("button", { name: "Entrada · Usar valor descoberto" }));
+    expect((within(dialog).getByLabelText("model-a: preço de entrada") as HTMLInputElement).value).toBe("0");
+    await click(within(dialog).getByRole("button", { name: "Salvar e testar de novo" }));
+    expect(state.calls.find((c) => c.method === "agents.setEndpointModels")?.args[2]).toEqual([
+      { id: model.id, discovered: discovery, overrides: { image: false, prices: { output: 2 } } },
+    ]);
+    expect(state.calls.filter((c) => c.method === "agents.probeEndpoint").map((c) => c.args[2])).toEqual([
+      { models: [model.id] },
+    ]);
+    await click(within(dialog).getByRole("button", { name: "Testar anexos novamente" }));
+    expect(state.calls.filter((c) => c.method === "agents.probeEndpoint").at(-1)?.args[2]).toEqual({
+      models: [model.id],
+      force: true,
+    });
+  });
+
+  test("retest is disabled when both attachments are manually set", async () => {
+    const state = seedState({
+      credentials: [
+        {
+          id: "saved-gw",
+          provider: "custom",
+          label: "My gateway",
+          keyHint: "4567",
+          endpoint: {
+            style: "openai",
+            baseURL: "https://gw.example/v1",
+            models: [{ id: "model-a", overrides: { image: false, pdf: true } }],
+          },
+          createdAt: "2026-11-01T10:00:00.000Z",
+          revokedAt: null,
+        },
+      ],
+    });
+    await renderApp(`/org/${ORG_ID}/settings/keys`, { api: createFakeApi(state) });
+    await settle(5);
+    await click(screen().getByRole("button", { name: "Modelos" }));
+    const dialog = screen().getByRole("dialog", { name: "Modelos de My gateway" });
+    await click(within(dialog).getByRole("button", { name: "Salvar e testar de novo" }));
+    expect(
+      (within(dialog).getByRole("button", { name: "Testar anexos novamente" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   const openForm = async (state = seedState()) => {
@@ -158,7 +227,7 @@ describe("Outro provedor in Settings › Chaves de IA", () => {
     );
     await type(within(add).getByLabelText("Endereço"), "https://gw.example/v1");
     await click(within(add).getByRole("button", { name: "Buscar modelos" }));
-    const rows = () => [...add.querySelectorAll(".endpoint-model label")].map((l) => l.textContent);
+    const rows = () => [...add.querySelectorAll(".endpoint-model > label")].map((l) => l.textContent);
     expect(rows()).toHaveLength(15);
     await click(within(add).getByRole("checkbox", { name: "kimi-k2" }));
     const search = within(add).getByRole("searchbox", { name: "Buscar modelo" });

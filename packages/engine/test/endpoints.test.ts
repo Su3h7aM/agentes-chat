@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { eq, schema } from "@agenteschat/db";
-import { customModelId, MODEL_CATALOG, ProviderError } from "@agenteschat/providers";
+import { contextWindowOf, customModelId, MODEL_CATALOG, ProviderError } from "@agenteschat/providers";
 import {
   agentAiState,
   allowsPrivateEndpoints,
   BudgetExceededError,
+  backfillEndpointCatalog,
   checkCredential,
   checkEndpoint,
+  cleanEndpointModels,
   createAgent,
   createCredential,
   type EndpointModel,
@@ -85,6 +87,65 @@ describe("the address", () => {
 });
 
 describe("the credential", () => {
+  test("unresolved capabilities stay unknown and use the fallback until manually configured", async () => {
+    f = await setup();
+    const cred = await addEndpoint(f, [{ id: "unresolved" }]);
+    const id = customModelId(cred.id, "unresolved");
+    const stored = (await listCredentials(f.db, f.owner.id, f.org.id)).find((row) => row.id === cred.id)?.endpoint
+      ?.models[0];
+    expect(stored?.discovered).toBeUndefined();
+    expect(stored?.overrides).toBeUndefined();
+    const unknown = await modelInfoFor(f.db, id, f.org.id);
+    expect(unknown?.contextWindow).toBeUndefined();
+    expect(unknown?.reads).toBeUndefined();
+    expect(contextWindowOf(id)).toBe(200_000);
+    await updateEndpointModels(f.db, f.owner.id, f.org.id, cred.id, [
+      { id: "unresolved", overrides: { contextWindow: 64_000, image: true, pdf: false } },
+    ]);
+    expect(await modelInfoFor(f.db, id, f.org.id)).toMatchObject({
+      contextWindow: 64_000,
+      reads: { image: true, pdf: false },
+    });
+    expect(contextWindowOf(id)).toBe(64_000);
+  });
+  test("resolves capabilities per field and keeps discovered data when manual overrides are cleared", async () => {
+    f = await setup();
+    const discoveredAt = "2026-11-25T00:00:00.000Z";
+    const discovered: NonNullable<EndpointModel["discovered"]> = {
+      contextWindow: { source: "catalog", value: 100_000, discoveredAt },
+      maxOutputTokens: { source: "catalog", value: 8_000, discoveredAt },
+      prices: {
+        input: { source: "endpoint", value: 500, discoveredAt },
+        output: { source: "endpoint", value: 900, discoveredAt },
+      },
+      image: { source: "probe", value: true, discoveredAt },
+      pdf: { source: "endpoint", value: true, discoveredAt },
+    };
+    const prices = endpointPricesFromUsd({ input: 1, output: 2 });
+    const cred = await addEndpoint(f, [
+      {
+        id: "model",
+        prices,
+        discovered,
+        overrides: { maxOutputTokens: 4_000, image: false, prices: { output: 0 } },
+      },
+    ]);
+    const model = customModelId(cred.id, "model");
+    const info = () => modelInfoFor(f.db, model, f.org.id);
+    expect(await info()).toMatchObject({
+      contextWindow: 100_000,
+      maxOutputTokens: 4_000,
+      reads: { image: false, pdf: true },
+      prices: { input: 1000, output: 0 },
+    });
+    await updateEndpointModels(f.db, f.owner.id, f.org.id, cred.id, [{ id: "model", prices, overrides: {} }]);
+    expect(await info()).toMatchObject({
+      contextWindow: 100_000,
+      maxOutputTokens: 8_000,
+      reads: { image: true, pdf: true },
+      prices: { input: 1000, output: 2000 },
+    });
+  });
   test("admins only; the endpoint is required, its models checked, the key sealed and never shown", async () => {
     f = await setup();
     const member = await addMember(f.db, f.org.id, "member");
@@ -384,5 +445,211 @@ describe("the test call", () => {
     expect(saved?.endpoint).toMatchObject({ baseURL: "https://gw.example/v1", models: [{ id: "tools" }] });
     expect(saved?.endpoint?.models[0]?.check).toBeUndefined();
     expect(await checkCredential(f.db, f.gateway, f.owner.id, f.org.id, cred.id)).toBe("unchecked");
+  });
+});
+
+test("complete endpoint modalities take precedence over catalog attachments", async () => {
+  f = await setup();
+  const read = (async (url: string | URL | Request) =>
+    String(url).includes("models.dev")
+      ? Response.json({
+          gw: { api: "https://gw.example/v1", models: { model: { modalities: { input: ["text", "image", "pdf"] } } } },
+        })
+      : Response.json({ data: [{ id: "model", input_modalities: ["text", "file"] }] })) as unknown as typeof fetch;
+  const result = await listEndpoint(
+    f.db,
+    f.owner.id,
+    f.org.id,
+    { style: "openai", baseURL: "https://gw.example/v1" },
+    { ...cloud, fetch: read },
+  );
+  expect(result.models[0]?.discovered?.image).toMatchObject({ source: "endpoint", value: false });
+  expect(result.models[0]?.discovered?.pdf).toMatchObject({ source: "endpoint", value: false });
+});
+
+test("catalog backfill fills partial models while retaining endpoint values", async () => {
+  f = await setup();
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const cred = await addEndpoint(f, [
+    { id: "partial", discovered: { contextWindow: { value: 100, source: "endpoint", discoveredAt } } },
+  ]);
+  const read = (async () =>
+    Response.json({
+      gw: {
+        api: "https://gw.example/v1",
+        models: { partial: { limit: { context: 200, output: 30 }, cost: { input: 0, output: 1 } } },
+      },
+    })) as unknown as typeof fetch;
+  await backfillEndpointCatalog(f.db, f.org.id, read);
+  const [row] = await f.db.select().from(schema.providerCredentials).where(eq(schema.providerCredentials.id, cred.id));
+  const discovery = row?.options.endpoint?.models[0]?.discovered;
+  expect(discovery?.contextWindow).toEqual({ value: 100, source: "endpoint", discoveredAt });
+  expect(discovery?.maxOutputTokens).toMatchObject({ value: 30, source: "catalog" });
+  expect(discovery?.prices?.input).toMatchObject({ value: 0, source: "catalog" });
+});
+
+test("backfill removes stale catalog fields even when discovery is otherwise complete", async () => {
+  f = await setup();
+  const date = "2026-01-01T00:00:00.000Z";
+  const catalog = <T>(value: T) => ({ value, source: "catalog" as const, discoveredAt: date });
+  const endpoint = <T>(value: T) => ({ value, source: "endpoint" as const, discoveredAt: date });
+  const probe = <T>(value: T) => ({ value, source: "probe" as const, discoveredAt: date });
+  const cred = await addEndpoint(f, [
+    {
+      id: "gpt-4o",
+      overrides: { image: true },
+      discovered: {
+        contextWindow: catalog(128_000),
+        maxOutputTokens: endpoint(4096),
+        image: catalog(true),
+        pdf: probe(false),
+        prices: { input: catalog(0), output: endpoint(1) },
+      },
+    },
+  ]);
+  const read = (async () =>
+    Response.json({ openai: { models: { "gpt-4o": { limit: { context: 128_000 } } } } })) as unknown as typeof fetch;
+  await backfillEndpointCatalog(f.db, f.org.id, read);
+  const [row] = await f.db.select().from(schema.providerCredentials).where(eq(schema.providerCredentials.id, cred.id));
+  expect(row?.options.endpoint?.models[0]).toMatchObject({
+    id: "gpt-4o",
+    overrides: { image: true },
+    discovered: {
+      maxOutputTokens: endpoint(4096),
+      pdf: probe(false),
+      prices: { output: endpoint(1) },
+    },
+  });
+  const discovery = row?.options.endpoint?.models[0]?.discovered;
+  expect(discovery?.contextWindow).toBeUndefined();
+  expect(discovery?.image).toBeUndefined();
+  expect(discovery?.prices?.input).toBeUndefined();
+});
+
+test("backfill skips complete discovery and repeated backfill leaves values unchanged", async () => {
+  f = await setup();
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const field = (value: number) => ({ value, source: "endpoint" as const, discoveredAt });
+  const cred = await addEndpoint(f, [
+    {
+      id: "complete",
+      discovered: {
+        contextWindow: field(100),
+        maxOutputTokens: field(20),
+        prices: { output: field(2), input: field(0) },
+      },
+    },
+  ]);
+  let calls = 0;
+  const read = (async () => {
+    calls++;
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  await backfillEndpointCatalog(f.db, f.org.id, read);
+  await backfillEndpointCatalog(f.db, f.org.id, read);
+  expect(calls).toBe(0);
+  const [row] = await f.db.select().from(schema.providerCredentials).where(eq(schema.providerCredentials.id, cred.id));
+  expect(row?.options.endpoint?.models[0]?.discovered?.prices?.input?.value).toBe(0);
+});
+
+test("resaving merges discovery added after duplicate lookup", async () => {
+  f = await setup();
+  const cred = await addEndpoint(f, [{ id: "model" }]);
+  let injected = false;
+  const proxied = new Proxy(f.db, {
+    get(target, property, receiver) {
+      if (property === "transaction")
+        return async (...args: unknown[]) => {
+          if (!injected) {
+            injected = true;
+            const [row] = await f.db
+              .select()
+              .from(schema.providerCredentials)
+              .where(eq(schema.providerCredentials.id, cred.id));
+            if (!row?.options.endpoint) throw new Error("missing endpoint");
+            const models = row.options.endpoint.models.map((model) => ({
+              ...model,
+              discovered: {
+                image: { value: true, source: "probe" as const, discoveredAt: "2026-01-01T00:00:00.000Z" },
+              },
+            }));
+            await f.db
+              .update(schema.providerCredentials)
+              .set({ options: { ...row.options, endpoint: { ...row.options.endpoint, models } } })
+              .where(eq(schema.providerCredentials.id, cred.id));
+          }
+          return Reflect.apply(target.transaction, target, args);
+        };
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const saved = await createCredential(
+    proxied,
+    f.keyWrapper,
+    f.owner.id,
+    f.org.id,
+    {
+      provider: "custom",
+      label: "OpenGateway",
+      apiKey: "gw-key-1234567",
+      endpoint: { style: "openai", baseURL: "https://gw.example/v1", models: [{ id: "model" }] },
+    },
+    { net: cloud },
+  );
+  expect(saved.reused).toBe(true);
+  expect(saved.endpoint?.models[0]?.discovered?.image?.value).toBe(true);
+});
+
+test("omitted client discovery preserves all stored fields", async () => {
+  f = await setup();
+  const discoveredAt = "2026-01-01T00:00:00.000Z";
+  const discovered = {
+    image: { source: "probe" as const, value: false, discoveredAt },
+    contextWindow: { source: "endpoint" as const, value: 100, discoveredAt },
+  };
+  expect(cleanEndpointModels([{ id: "m" }], [{ id: "m", discovered }])[0]?.discovered).toEqual(discovered);
+});
+
+test("backfill normalizes legacy grouped data while filling gaps", async () => {
+  f = await setup();
+  const cred = await addEndpoint(f, [{ id: "partial" }]);
+  const [row] = await f.db.select().from(schema.providerCredentials).where(eq(schema.providerCredentials.id, cred.id));
+  if (!row?.options.endpoint) throw new Error("missing endpoint");
+  const legacy = {
+    discoveredAt: "2026-01-01T00:00:00.000Z",
+    limits: { source: "endpoint", value: { contextWindow: 100 } },
+  };
+  const models = [{ id: "partial", discovered: legacy }] as unknown as EndpointModel[];
+  await f.db
+    .update(schema.providerCredentials)
+    .set({ options: { ...row.options, endpoint: { ...row.options.endpoint, models } } })
+    .where(eq(schema.providerCredentials.id, cred.id));
+  const read = (async () =>
+    Response.json({
+      gw: { api: "https://gw.example/v1", models: { partial: { limit: { output: 20 } } } },
+    })) as unknown as typeof fetch;
+  await backfillEndpointCatalog(f.db, f.org.id, read);
+  const [updated] = await f.db
+    .select()
+    .from(schema.providerCredentials)
+    .where(eq(schema.providerCredentials.id, cred.id));
+  const discovered = updated?.options.endpoint?.models[0]?.discovered;
+  expect(discovered?.contextWindow).toEqual({ source: "endpoint", value: 100, discoveredAt: legacy.discoveredAt });
+  expect(discovered?.maxOutputTokens?.value).toBe(20);
+});
+
+test("saving models preserves unknown stored fields and accepts new ones", async () => {
+  f = await setup();
+  const previous = [{ id: "m", futureSetting: { enabled: true } }] as unknown as EndpointModel[];
+  expect(cleanEndpointModels([{ id: "m" }], previous)[0] as unknown).toEqual({
+    id: "m",
+    futureSetting: { enabled: true },
+  });
+  const incoming = [{ id: "m", anotherSetting: 7 }] as unknown as EndpointModel[];
+  expect(cleanEndpointModels(incoming, previous)[0] as unknown).toEqual({
+    id: "m",
+    futureSetting: { enabled: true },
+    anotherSetting: 7,
   });
 });

@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { OutboundAddressError } from "@agenteschat/adapters";
 import { and, type Database, type Executor, eq, isNull, schema } from "@agenteschat/db";
 import {
@@ -6,12 +7,18 @@ import {
   type EndpointStyle,
   listEndpointModels,
   type ModelInfo,
+  mergeEndpointDiscovery,
+  normalizeEndpointDiscovery,
+  ProviderError,
   parseCustomModel,
   setCustomModels,
+  shouldProbeAttachment,
   type ToolSpec,
 } from "@agenteschat/providers";
 import { recordAudit } from "./audit";
 import { caches } from "./cache";
+import { enrichEndpointModel, loadEndpointCatalog } from "./endpoint-catalog";
+import { probeImage, probePdf } from "./endpoint-probe-assets";
 import { NotFoundError, ValidationError } from "./errors";
 import type { ModelGateway } from "./gateway";
 import { assertPublicHttpsUrl, internalAddress, publicHttpsFetch, type ResolveHost } from "./net-guard";
@@ -94,7 +101,20 @@ export async function endpointAddress(raw: string, style: EndpointStyle, net: En
   return `${url.origin}${base}`;
 }
 
-/** The models an admin chose, checked: ids that look like one, names and prices that make sense, at most 100. */
+type EndpointPrices = NonNullable<EndpointModel["prices"]>;
+type EndpointOverrides = NonNullable<EndpointModel["overrides"]>;
+
+function validateEndpointPrices(prices?: Partial<EndpointPrices>) {
+  if (prices && Object.values(prices).some((v) => !Number.isSafeInteger(v) || v < 0))
+    throw new ValidationError("Prices must be nonnegative", "endpoint.prices");
+}
+
+function validateEndpointLimits({ contextWindow, maxOutputTokens }: EndpointOverrides) {
+  if ([contextWindow, maxOutputTokens].some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0)))
+    throw new ValidationError("Token limits must be positive integers", "endpoint.limits");
+}
+
+/** Validates the selected models and carries forward metadata omitted by older clients. */
 export function cleanEndpointModels(models: EndpointModel[], previous: EndpointModel[] = []): EndpointModel[] {
   if (models.length === 0) throw new ValidationError("Choose at least one model", "endpoint.no_models");
   if (models.length > MAX_ENDPOINT_MODELS)
@@ -106,24 +126,93 @@ export function cleanEndpointModels(models: EndpointModel[], previous: EndpointM
     if (seen.has(id)) throw new ValidationError(`${id} is listed twice`, "endpoint.model_id");
     seen.add(id);
     const label = m.label?.trim().slice(0, 120);
-    const p = m.prices;
-    if (p && Object.values(p).some((v) => !Number.isSafeInteger(v) || v < 0))
-      throw new ValidationError("Prices can't be negative", "endpoint.prices");
-    const check = previous.find((o) => o.id === id)?.check;
-    return { id, ...(label ? { label } : {}), ...(p ? { prices: p } : {}), ...(check ? { check } : {}) };
+    const before = previous.find((o) => o.id === id);
+    const overrides = m.overrides ?? before?.overrides;
+    const discovered = mergeEndpointDiscovery(before?.discovered, m.discovered);
+    validateEndpointPrices(m.prices);
+    if (overrides) {
+      validateEndpointLimits(overrides);
+      validateEndpointPrices(overrides.prices);
+    }
+    if (discovered) {
+      validateEndpointLimits({
+        contextWindow: discovered.contextWindow?.value,
+        maxOutputTokens: discovered.maxOutputTokens?.value,
+      });
+      validateEndpointPrices(
+        Object.fromEntries(
+          (["input", "output", "cacheRead", "cacheWrite"] as const).flatMap((key) => {
+            const field = discovered.prices?.[key];
+            return field ? [[key, field.value]] : [];
+          }),
+        ),
+      );
+    }
+    const {
+      id: _id,
+      label: _label,
+      prices: _prices,
+      overrides: _overrides,
+      discovered: _discovered,
+      check: _check,
+      ...storedExtra
+    } = before ?? { id };
+    const {
+      id: _incomingId,
+      label: _incomingLabel,
+      prices: _incomingPrices,
+      overrides: _incomingOverrides,
+      discovered: _incomingDiscovered,
+      check: _incomingCheck,
+      ...incomingExtra
+    } = m;
+    return {
+      ...storedExtra,
+      ...incomingExtra,
+      id,
+      ...(label ? { label } : {}),
+      ...(m.prices ? { prices: m.prices } : {}),
+      ...(overrides ? { overrides } : {}),
+      ...(discovered ? { discovered } : {}),
+      ...(before?.check ? { check: before.check } : {}),
+    };
   });
 }
 
 /** An endpoint model as the gateway and the pickers read it: never a pick for routing, the judge or summaries. */
-const infoOf = (endpointName: string, m: EndpointModel): ModelInfo => ({
-  provider: "custom",
-  label: m.label ?? m.id,
-  endpoint: endpointName,
-  prices: m.prices ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  ...(m.prices ? {} : { unpriced: true as const }),
-  serverSideFallback: false,
-  structuredOutput: false,
-});
+const infoOf = (endpointName: string, m: EndpointModel): ModelInfo => {
+  const { overrides } = m;
+  const discovered = normalizeEndpointDiscovery(m.discovered);
+  const contextWindow = overrides?.contextWindow ?? discovered?.contextWindow?.value;
+  const maxOutputTokens = overrides?.maxOutputTokens ?? discovered?.maxOutputTokens?.value;
+  const image = overrides?.image ?? discovered?.image?.value;
+  const pdf = overrides?.pdf ?? discovered?.pdf?.value;
+  const { input, output, cacheRead, cacheWrite } = {
+    ...Object.fromEntries(
+      (["input", "output", "cacheRead", "cacheWrite"] as const).flatMap((key) => {
+        const field = discovered?.prices?.[key];
+        return field ? [[key, field.value]] : [];
+      }),
+    ),
+    ...m.prices,
+    ...overrides?.prices,
+  };
+  const priced = input !== undefined && output !== undefined;
+  return {
+    provider: "custom",
+    label: m.label ?? m.id,
+    endpoint: endpointName,
+    prices: priced
+      ? { input, output, cacheRead: cacheRead ?? input, cacheWrite: cacheWrite ?? input }
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(priced ? {} : { unpriced: true as const }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(image === undefined && pdf === undefined ? {} : { reads: { image, pdf } }),
+    serverSideFallback: false,
+    structuredOutput: false,
+  };
+};
 
 /**
  * Puts an organization's endpoint models in memory (`setCustomModels`) from its live `custom` credentials, read like
@@ -146,6 +235,13 @@ export async function loadEndpointModels(db: Executor, orgId: string) {
         ),
       ),
   )) as { id: string; label: string; options: { endpoint?: StoredEndpoint } }[];
+  registerEndpointModels(orgId, rows);
+}
+
+function registerEndpointModels(
+  orgId: string,
+  rows: { id: string; label: string; options: { endpoint?: StoredEndpoint } }[],
+) {
   setCustomModels(
     orgId,
     Object.fromEntries(
@@ -154,6 +250,56 @@ export async function loadEndpointModels(db: Executor, orgId: string) {
       ),
     ),
   );
+}
+
+/** Backfill metadata away from the model call path. Compare the row before writing to preserve concurrent edits. */
+function needsEndpointCatalog(model: EndpointModel): boolean {
+  const discovery = model.discovered;
+  if (!discovery || "discoveredAt" in discovery) return true;
+  if (
+    [
+      discovery.contextWindow,
+      discovery.maxOutputTokens,
+      discovery.image,
+      discovery.pdf,
+      ...Object.values(discovery.prices ?? {}),
+    ].some((field) => field?.source === "catalog")
+  )
+    return true;
+  return (
+    !discovery.contextWindow || !discovery.maxOutputTokens || !discovery.prices?.input || !discovery.prices?.output
+  );
+}
+
+export async function backfillEndpointCatalog(db: Executor, orgId: string, read?: typeof fetch) {
+  const { providerCredentials } = schema;
+  const where = and(
+    eq(providerCredentials.orgId, orgId),
+    eq(providerCredentials.provider, "custom"),
+    isNull(providerCredentials.revokedAt),
+  );
+  const rows = await db
+    .select({ id: providerCredentials.id, options: providerCredentials.options })
+    .from(providerCredentials)
+    .where(where);
+  const legacy = rows.filter(({ options }) => options.endpoint?.models.some(needsEndpointCatalog));
+  if (!legacy.length) return;
+  const catalog = await loadEndpointCatalog(read);
+  if (!catalog) return;
+  for (const { id, options } of legacy) {
+    const endpoint = options.endpoint;
+    if (!endpoint) continue;
+    const models = endpoint.models.map((model) =>
+      needsEndpointCatalog(model) ? enrichEndpointModel(model, endpoint.baseURL, catalog) : model,
+    );
+    if (models.every((model, index) => model === endpoint.models[index])) continue;
+    await db
+      .update(providerCredentials)
+      .set({ options: { ...options, endpoint: { ...endpoint, models } } })
+      .where(and(where, eq(providerCredentials.id, id), eq(providerCredentials.options, options)));
+    caches.credentials.delete(`${orgId}:${id}`);
+    caches.credentials.delete(`${orgId}:endpoints`);
+  }
 }
 
 /**
@@ -166,7 +312,7 @@ export async function listEndpoint(
   orgId: string,
   input: { style: EndpointStyle; baseURL: string; apiKey?: string },
   net: EndpointNet,
-): Promise<{ baseURL: string; models: { id: string; label?: string }[]; error?: string }> {
+): Promise<{ baseURL: string; models: EndpointModel[]; error?: string }> {
   await requirePermission(db, actorId, orgId, "manage_credentials");
   const baseURL = await endpointAddress(input.baseURL, input.style, net);
   try {
@@ -175,7 +321,41 @@ export async function listEndpoint(
       input.apiKey?.trim() || ENDPOINT_NO_KEY,
       endpointFetch(net),
     );
-    return { baseURL, models };
+    const catalog = models.length ? await loadEndpointCatalog(net.fetch) : undefined;
+    const discoveredAt = new Date().toISOString();
+    const source = "endpoint" as const;
+    return {
+      baseURL,
+      models: models
+        .map(
+          ({ caps, ...model }): EndpointModel =>
+            caps
+              ? {
+                  ...model,
+                  discovered: {
+                    ...(caps.limits?.contextWindow === undefined
+                      ? {}
+                      : { contextWindow: { source, value: caps.limits.contextWindow, discoveredAt } }),
+                    ...(caps.limits?.maxOutputTokens === undefined
+                      ? {}
+                      : { maxOutputTokens: { source, value: caps.limits.maxOutputTokens, discoveredAt } }),
+                    ...(caps.prices
+                      ? {
+                          prices: Object.fromEntries(
+                            Object.entries(caps.prices)
+                              .filter(([, value]) => value !== undefined)
+                              .map(([key, value]) => [key, { source, value: Math.round(value * 1000), discoveredAt }]),
+                          ),
+                        }
+                      : {}),
+                    ...(caps.image === undefined ? {} : { image: { source, value: caps.image, discoveredAt } }),
+                    ...(caps.pdf === undefined ? {} : { pdf: { source, value: caps.pdf, discoveredAt } }),
+                  },
+                }
+              : model,
+        )
+        .map((model) => (catalog ? enrichEndpointModel(model, baseURL, catalog) : model)),
+    };
   } catch (error) {
     if (error instanceof OutboundAddressError) throw internalAddress(new URL(baseURL).hostname);
     return { baseURL, models: [], error: redactCredentials(error instanceof Error ? error.message : String(error)) };
@@ -231,14 +411,179 @@ export async function checkEndpoint(
       }
     }),
   );
-  const models = endpoint.models.map((m) => ({ ...m, check: results.find((r) => r.model === m.id)?.check ?? m.check }));
-  await db
-    .update(schema.providerCredentials)
-    .set({ options: { ...row.options, endpoint: { ...endpoint, models } } })
-    .where(where);
+  await db.transaction(async (tx) => {
+    const [latest] = await tx.select().from(schema.providerCredentials).where(where).for("update");
+    const current = latest?.options.endpoint;
+    if (!current || latest.secretCiphertext !== row.secretCiphertext) return;
+    const models = current.models.map((m) => ({
+      ...m,
+      check: results.find((r) => r.model === m.id)?.check ?? m.check,
+    }));
+    await tx
+      .update(schema.providerCredentials)
+      .set({ options: { ...latest.options, endpoint: { ...current, models } } })
+      .where(where);
+  });
   caches.credentials.delete(`${orgId}:${credentialId}`);
   caches.credentials.delete(`${orgId}:endpoints`);
   return results;
+}
+
+const PROBE_TOOL: ToolSpec = {
+  name: "get_attachments",
+  description: "Return the attachments to inspect",
+  inputSchema: { type: "object", properties: {} },
+};
+type Attachment = "image" | "pdf";
+const ATTACHMENTS: Attachment[] = ["image", "pdf"];
+
+function containsProbeCode(text: string, code: string): boolean {
+  const word = (char: string | undefined) =>
+    char !== undefined &&
+    ((char >= "0" && char <= "9") || (char >= "A" && char <= "Z") || (char >= "a" && char <= "z") || char === "_");
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== code[0] || word(text[start - 1])) continue;
+    let at = start + 1;
+    let index = 1;
+    while (index < code.length) {
+      while (text[at] !== undefined && (text[at] === "-" || text[at]?.trim() === "")) at++;
+      if (text[at] !== code[index]) break;
+      at++;
+      index++;
+    }
+    if (index === code.length && !word(text[at])) return true;
+  }
+  return false;
+}
+
+async function testAttachments(
+  gateway: Pick<ModelGateway, "complete">,
+  orgId: string,
+  model: string,
+  types: Attachment[],
+): Promise<Partial<Record<Attachment, boolean>>> {
+  const codes = { image: String(randomInt(100000, 500000)), pdf: String(randomInt(500000, 999999)) };
+  try {
+    const response = await gateway.complete({
+      orgId,
+      kind: "summary",
+      model,
+      system: "Transcribe the six-digit codes visible in the tool attachments. Return only the codes you can see.",
+      messages: [
+        { role: "user", content: "Read the codes in the attachments." },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call_endpoint_probe", name: PROBE_TOOL.name, input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              toolUseId: "call_endpoint_probe",
+              content: "Read each attachment.",
+              images: types.map((type) => (type === "image" ? probeImage(codes.image) : probePdf(codes.pdf))),
+            },
+          ],
+        },
+      ],
+      endpointReads: Object.fromEntries(types.map((type) => [type, true])),
+      tools: [PROBE_TOOL],
+      maxTokens: 256,
+      signal: AbortSignal.timeout(18_000),
+    });
+    return Object.fromEntries(
+      types.flatMap((type) => (containsProbeCode(response.text, codes[type]) ? [[type, true]] : [])),
+    );
+  } catch (error) {
+    if (!(error instanceof ProviderError) || error.status !== 415) return {};
+    if (types.length === 1 && types[0]) return { [types[0]]: false };
+    const [image, pdf] = await Promise.all([
+      testAttachments(gateway, orgId, model, ["image"]),
+      testAttachments(gateway, orgId, model, ["pdf"]),
+    ]);
+    return { ...image, ...pdf };
+  }
+}
+
+export async function probeEndpoint(
+  db: Database,
+  gateway: Pick<ModelGateway, "complete">,
+  actorId: string,
+  orgId: string,
+  credentialId: string,
+  input: { models?: string[]; force?: boolean },
+): Promise<EndpointModel[]> {
+  await requirePermission(db, actorId, orgId, "manage_credentials");
+  const where = and(
+    eq(schema.providerCredentials.id, credentialId),
+    eq(schema.providerCredentials.orgId, orgId),
+    eq(schema.providerCredentials.provider, "custom"),
+    isNull(schema.providerCredentials.revokedAt),
+  );
+  const [row] = await db.select().from(schema.providerCredentials).where(where);
+  const endpoint = row?.options.endpoint;
+  if (!endpoint) throw new NotFoundError("Credential not found");
+  const selected = input.models ? new Set(input.models) : undefined;
+  const jobs = endpoint.models.flatMap((model) => {
+    if (selected && !selected.has(model.id)) return [];
+    if (!input.force && (!model.check || model.check === "failed")) return [];
+    const types = ATTACHMENTS.filter((type) =>
+      shouldProbeAttachment(model.discovered?.[type], model.overrides?.[type], input.force),
+    );
+    return types.length ? [{ model, types }] : [];
+  });
+  if (!jobs.length) return endpoint.models;
+  const results = new Map<string, Partial<Record<Attachment, boolean>>>();
+  await Promise.all(
+    Array.from({ length: Math.min(4, jobs.length) }, async () => {
+      for (let job = jobs.shift(); job; job = jobs.shift()) {
+        results.set(
+          job.model.id,
+          await testAttachments(gateway, orgId, customModelId(credentialId, job.model.id), job.types),
+        );
+      }
+    }),
+  );
+  const models = await db.transaction(async (tx) => {
+    const [latest] = await tx.select().from(schema.providerCredentials).where(where).for("update");
+    const current = latest?.options.endpoint;
+    if (!current) throw new NotFoundError("Credential not found");
+    if (
+      latest.secretCiphertext !== row.secretCiphertext ||
+      current.baseURL !== endpoint.baseURL ||
+      current.style !== endpoint.style
+    )
+      return current.models;
+    const discoveredAt = new Date().toISOString();
+    const source = "probe" as const;
+    const updated = current.models.map((model) => {
+      const result = results.get(model.id);
+      if (result?.image === undefined && result?.pdf === undefined) return model;
+      const image =
+        result.image !== undefined &&
+        model.overrides?.image === undefined &&
+        model.discovered?.image?.source !== "endpoint";
+      const pdf =
+        result.pdf !== undefined && model.overrides?.pdf === undefined && model.discovered?.pdf?.source !== "endpoint";
+      if (!image && !pdf) return model;
+      return {
+        ...model,
+        discovered: mergeEndpointDiscovery(model.discovered, {
+          ...(image ? { image: { source, value: result.image as boolean, discoveredAt } } : {}),
+          ...(pdf ? { pdf: { source, value: result.pdf as boolean, discoveredAt } } : {}),
+        }),
+      };
+    });
+    await tx
+      .update(schema.providerCredentials)
+      .set({ options: { ...latest.options, endpoint: { ...current, models: updated } } })
+      .where(where);
+    return updated;
+  });
+  caches.credentials.delete(`${orgId}:${credentialId}`);
+  caches.credentials.delete(`${orgId}:endpoints`);
+  return models;
 }
 
 /** Changes which models an endpoint offers and their prices (admins); checks are run again by the caller. */
@@ -256,14 +601,17 @@ export async function updateEndpointModels(
     eq(schema.providerCredentials.provider, "custom"),
     isNull(schema.providerCredentials.revokedAt),
   );
-  const [row] = await db.select().from(schema.providerCredentials).where(where);
-  const endpoint = row?.options.endpoint;
-  if (!row || !endpoint) throw new NotFoundError("Credential not found");
-  const next = { ...endpoint, models: cleanEndpointModels(models, endpoint.models) };
-  await db
-    .update(schema.providerCredentials)
-    .set({ options: { ...row.options, endpoint: next } })
-    .where(where);
+  const { row, next } = await db.transaction(async (tx) => {
+    const [row] = await tx.select().from(schema.providerCredentials).where(where).for("update");
+    const endpoint = row?.options.endpoint;
+    if (!row || !endpoint) throw new NotFoundError("Credential not found");
+    const next = { ...endpoint, models: cleanEndpointModels(models, endpoint.models) };
+    await tx
+      .update(schema.providerCredentials)
+      .set({ options: { ...row.options, endpoint: next } })
+      .where(where);
+    return { row, next };
+  });
   await recordAudit(db, {
     orgId,
     actor: { type: "person", id: actorId },

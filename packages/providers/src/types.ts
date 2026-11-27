@@ -66,22 +66,31 @@ export const hasToolImages = (messages: ModelMessage[], which: (image: ToolImage
 
 export const isPdfImage = (image: ToolImage) => image.mediaType === PDF_MEDIA_TYPE;
 
+/** Which attachment formats the model can read through this connection. */
+export interface AttachmentReads {
+  image?: boolean;
+  pdf?: boolean;
+}
+
+const canReadAttachment = (reads: AttachmentReads, image: ToolImage) =>
+  isPdfImage(image) ? reads.pdf === true : reads.image === true;
+
 /**
  * Whether `withoutImages` leaves this one out with nothing read in its place: a picture, unless the endpoint reads
  * pictures, or a PDF no text was read out of (a scan).
  */
 export const lostWithoutImages =
-  (pictures = false) =>
+  (reads: AttachmentReads = {}) =>
   (image: ToolImage) =>
-    isPdfImage(image) ? !image.text : !pictures;
+    !canReadAttachment(reads, image) && !(isPdfImage(image) && image.text);
 
 /**
  * The messages with tool results' pictures and PDFs left out: for endpoints that take text only (another company's
  * Anthropic-compatible API, OpenRouter), where one would fail the whole request. A PDF with text of its own goes as
  * that text; for the rest a note names the AI (`model`) and the way out, so the agent tells the person the real cause.
- * `pictures`: the endpoint reads pictures but no PDFs, so only the PDFs are left out.
+ * `reads` describes the formats the endpoint can receive directly.
  */
-export const withoutImages = (messages: ModelMessage[], model?: string, pictures = false): ModelMessage[] =>
+export const withoutImages = (messages: ModelMessage[], model?: string, reads: AttachmentReads = {}): ModelMessage[] =>
   messages.map((m) =>
     typeof m.content === "string"
       ? m
@@ -90,27 +99,29 @@ export const withoutImages = (messages: ModelMessage[], model?: string, pictures
           content: m.content.map((b) => {
             if (b.type !== "tool_result" || !b.images?.length) return b;
             const { images, ...rest } = b;
-            const kept = pictures ? images.filter((i) => !isPdfImage(i)) : [];
+            const kept = images.filter((i) => canReadAttachment(reads, i));
             if (kept.length === images.length) return b;
             const ai = model ? `this agent's AI (${model})` : "this agent's AI";
-            const reads = pictures
+            const connection = reads.image
               ? "reads pictures through this connection, not PDFs"
-              : "reads text only through this connection";
+              : reads.pdf
+                ? "reads PDFs through this connection, not pictures"
+                : "reads text only through this connection";
             const lines = [b.content];
             for (const i of images) {
-              if (!isPdfImage(i) || !i.text) continue;
+              if (reads.pdf || !isPdfImage(i) || !i.text) continue;
               lines.push(
-                `[The PDF${i.name ? ` ${i.name}` : ""} is not shown to you as pages: ${ai} ${reads}, so its text, read out of it, follows; its pictures, scanned pages and layout aren't in it. If the answer hangs on those, tell the person exactly that, and that an AI that reads PDFs (Claude, GPT or Gemini), picked in this agent's settings, would see them.]`,
+                `[The PDF${i.name ? ` ${i.name}` : ""} is not shown to you as pages: ${ai} ${connection}, so its text, read out of it, follows; its pictures, scanned pages and layout aren't in it. If the answer hangs on those, tell the person exactly that, and that an AI that reads PDFs (Claude, GPT or Gemini), picked in this agent's settings, would see them.]`,
                 i.text,
               );
             }
-            const lost = images.filter(lostWithoutImages(pictures));
+            const lost = images.filter(lostWithoutImages(reads));
             const pdf = lost.some(isPdfImage);
             const picture = lost.some((i) => !isPdfImage(i));
             if (pdf || picture) {
-              const what = pdf && picture ? "picture and the PDF" : pdf ? "PDF" : "picture";
+              const what = pdf && picture ? "picture and the PDF are" : pdf ? "PDF is" : "picture is";
               lines.push(
-                `[The ${what} is not shown to you: ${ai} ${reads}.${pdf ? " No text could be read out of the PDF either (a scan has none)." : ""} Tell the person exactly that, and that an AI that reads ${pdf ? "pictures and PDFs" : "pictures"} (Claude, GPT or Gemini), picked in this agent's settings, would see it. Never say the file came empty.]`,
+                `[The ${what} not shown to you: ${ai} ${connection}.${pdf ? " No text could be read out of the PDF either (a scan has none)." : ""} Tell the person exactly that, and that an AI that reads ${pdf ? "pictures and PDFs" : "pictures"} (Claude, GPT or Gemini), picked in this agent's settings, would see it. Never say the file came empty.]`,
               );
             }
             return { ...rest, ...(kept.length > 0 ? { images: kept } : {}), content: lines.join("\n") };
@@ -222,7 +233,7 @@ export interface ModelResult {
    * refusal that sent the call again without any.
    */
   thinking?: { dropped?: Record<string, number>; refused?: string };
-  /** Tool results' pictures or PDFs were left out: this connection takes text only (`withoutImages`). */
+  /** Tool results' pictures or PDFs were left out: the connection does not read their format (`withoutImages`). */
   imagesLeftOut?: true;
 }
 
@@ -256,6 +267,7 @@ export interface StreamOptions {
 export interface Endpoint {
   style: "openai" | "anthropic";
   baseURL: string;
+  reads?: AttachmentReads;
 }
 
 export interface ModelProvider {

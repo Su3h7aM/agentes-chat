@@ -11116,14 +11116,14 @@ html:not([data-pointer]) .agp-cell:focus-visible {
 .endpoint-model > .ac-btn {
   margin-inline-end: calc((var(--control-h-md) - var(--control-h-sm)) / 2);
 }
-.endpoint-model__prices,
-.endpoint-model__error {
+.endpoint-model__capabilities {
   grid-column: 2 / -1;
-}
-.endpoint-model__prices {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
   gap: var(--space-2);
+}
+.endpoint-attachments {
+  flex-wrap: wrap;
 }
 .endpoint-checks {
   display: grid;

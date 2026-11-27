@@ -20,6 +20,45 @@ import { users } from "./auth";
 import { machineAccounts, machines } from "./machines";
 import { organizationMembers, organizations, orgRoles } from "./tenancy";
 
+type EndpointPrices = { input: number; output: number; cacheRead: number; cacheWrite: number };
+type DiscoverySource = "endpoint" | "probe" | "catalog";
+type EndpointDiscovery<T> = { source: DiscoverySource; value: T; discoveredAt: string };
+
+export interface EndpointModelLimits {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+export interface EndpointModelOverrides extends EndpointModelLimits {
+  prices?: Partial<EndpointPrices>;
+  image?: boolean;
+  pdf?: boolean;
+}
+
+export interface EndpointModelDiscovery {
+  contextWindow?: EndpointDiscovery<number>;
+  maxOutputTokens?: EndpointDiscovery<number>;
+  prices?: Partial<Record<keyof EndpointPrices, EndpointDiscovery<number>>>;
+  image?: EndpointDiscovery<boolean>;
+  pdf?: EndpointDiscovery<boolean>;
+}
+
+/** A workspace's own model endpoint as its credential keeps it (ADR 0146). Prices in nano-USD per token. */
+export interface StoredEndpoint {
+  style: "openai" | "anthropic";
+  baseURL: string;
+  models: {
+    id: string;
+    label?: string;
+    /** Manual prices saved before discovery. */
+    prices?: EndpointPrices;
+    overrides?: EndpointModelOverrides;
+    discovered?: EndpointModelDiscovery;
+    /** The last test call: answered and called a tool, answered without calling it, or failed. */
+    check?: "ok" | "no_tools" | "failed";
+  }[];
+}
+
 /**
  * API keys of model providers, owned by the organization (BYOK). Never
  * returned to any client. Envelope encryption (docs/adr/0007-provider-credentials.md):
@@ -28,19 +67,6 @@ import { organizationMembers, organizations, orgRoles } from "./tenancy";
  * (self-host: derived from AGENTES_SECRET; Cloud: a KMS key, via the
  * `KeyWrapper` adapter). Both ciphertexts are bound to (org_id, id).
  */
-/** A workspace's own model endpoint as its credential keeps it (ADR 0146). Prices in nano-USD per token. */
-export interface StoredEndpoint {
-  style: "openai" | "anthropic";
-  baseURL: string;
-  models: {
-    id: string;
-    label?: string;
-    prices?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    /** The last test call: answered and called a tool, answered without calling it, or failed. */
-    check?: "ok" | "no_tools" | "failed";
-  }[];
-}
-
 export const providerCredentials = pgTable(
   "provider_credentials",
   {

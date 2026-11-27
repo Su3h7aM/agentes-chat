@@ -23,6 +23,7 @@ import { recordAudit } from "./audit";
 import { caches } from "./cache";
 import { openSecret, SealedValueError, sealSecret } from "./crypto";
 import {
+  backfillEndpointCatalog,
   cleanEndpointModels,
   ENDPOINT_NO_KEY,
   type EndpointModel,
@@ -156,7 +157,10 @@ export async function modelInfoFor(db: Executor, model: string, orgId?: string):
  */
 export async function pickerModels(db: Executor, orgIds: readonly string[] = []): Promise<[string, ModelInfo][]> {
   if (await openRouterInUse(db)) await ensureOpenRouterModels();
-  for (const orgId of orgIds) await loadEndpointModels(db, orgId);
+  for (const orgId of orgIds) {
+    void backfillEndpointCatalog(db, orgId).catch(() => undefined);
+    await loadEndpointModels(db, orgId);
+  }
   return [...listedModels(), ...orgIds.flatMap((orgId) => customModelsOf(orgId))];
 }
 
@@ -362,17 +366,29 @@ async function resave(
   row: CredentialRow,
   input: { provider: ProviderId; label: string; makeDefault?: boolean; endpoint?: StoredEndpoint | undefined },
 ) {
-  const before = row.options.endpoint;
-  const endpoint = input.endpoint && {
-    ...input.endpoint,
-    models: cleanEndpointModels(input.endpoint.models, before?.style === input.endpoint.style ? before.models : []),
-  };
-  const label = input.label === PROVIDERS[input.provider].label ? row.label : input.label;
   return db.transaction(async (tx) => {
     await lockCredential(tx, orgId, row.id);
+    const [latest] = await tx
+      .select()
+      .from(providerCredentials)
+      .where(
+        and(
+          eq(providerCredentials.id, row.id),
+          eq(providerCredentials.orgId, orgId),
+          isNull(providerCredentials.revokedAt),
+        ),
+      )
+      .for("update");
+    if (!latest) throw new NotFoundError("Credential not found");
+    const before = latest.options.endpoint;
+    const endpoint = input.endpoint && {
+      ...input.endpoint,
+      models: cleanEndpointModels(input.endpoint.models, before?.style === input.endpoint.style ? before.models : []),
+    };
+    const label = input.label === PROVIDERS[input.provider].label ? latest.label : input.label;
     const [r] = await tx
       .update(providerCredentials)
-      .set({ label, ...(endpoint ? { options: { ...row.options, endpoint } } : {}) })
+      .set({ label, ...(endpoint ? { options: { ...latest.options, endpoint } } : {}) })
       .where(and(eq(providerCredentials.id, row.id), eq(providerCredentials.orgId, orgId)))
       .returning();
     if (input.makeDefault) await setDefault(tx, orgId, input.provider, row.id);

@@ -77,6 +77,7 @@ import { openKeyForAll } from "./AgentSetupScreen";
 import { HubList } from "./AiHubScreens";
 import { CliFetchNote } from "./CliFetchNote";
 import { DecisionSettingsCard } from "./DecisionSettings";
+import { EndpointForm } from "./EndpointForm";
 
 import { orderMoves, ownAccountRows } from "./logic";
 import { openConnectAi } from "./NoAiCard";
@@ -669,6 +670,14 @@ function KeysSection({ locale }: { locale: string }) {
                 onPress: () => update.mutate({ defaultCredentialId: k.id }, { onError: failed }),
               },
             ]),
+        ...(!held && k.endpoint
+          ? [
+              {
+                label: t("endpoint.manageModels"),
+                onPress: () => sheet.open(<EndpointForm orgId={orgId} credential={k} onDone={() => sheet.close()} />),
+              },
+            ]
+          : []),
         ...(held ? [] : [{ label: t("settings.rotate"), onPress: () => rotate(k) }]),
         ...(k.copies ? [{ label: t("settings.removeCopies"), onPress: () => removeCopies(k) }] : []),
         { label: t("settings.remove"), destructive: true, onPress: () => remove(k) },

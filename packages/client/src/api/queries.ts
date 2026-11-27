@@ -1540,12 +1540,30 @@ export function useAddCredential(orgId: string, silent = false) {
   });
 }
 
-/** What an endpoint lists before it is saved (ADR 0146). */
+/** What an endpoint lists (ADR 0146). */
 export function useEndpointModels(orgId: string) {
   const api = useApi();
   return useMutation({
     mutationFn: (input: Parameters<ApiClient["agents"]["endpointModels"]>[1]) =>
       api.agents.endpointModels(orgId, input),
+  });
+}
+
+/** Tests attachments separately from saving, even if the form closes while the test runs. */
+export function useProbeEndpoint(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { silent: true },
+    mutationFn: ({
+      credentialId,
+      ...input
+    }: Parameters<ApiClient["agents"]["probeEndpoint"]>[2] & { credentialId: string }) =>
+      api.agents.probeEndpoint(orgId, credentialId, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.models });
+      return qc.invalidateQueries({ queryKey: keys.credentials(orgId) });
+    },
   });
 }
 

@@ -17,23 +17,102 @@ const MODEL_ID = /^[\w.:/@+-]{1,200}$/;
 type Raw = Record<string, unknown>;
 const obj = (v: unknown): Raw | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Raw) : null);
 
+export interface ListedEndpointModel {
+  id: string;
+  label?: string;
+  caps?: {
+    limits?: { contextWindow?: number; maxOutputTokens?: number };
+    /** US dollars per million tokens. */
+    prices?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+    image?: boolean;
+    pdf?: boolean;
+  };
+}
+
+const tokenLimit = (...values: unknown[]) =>
+  values.find((value): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0);
+
+export function inputAttachmentCapabilities(input: string[], fileIsPdf = false): { image?: boolean; pdf?: boolean } {
+  const values = input.map((value) => value.trim().toLowerCase());
+  const complete = values.includes("text");
+  const image = values.includes("image");
+  const pdf = values.includes("pdf") || (fileIsPdf && values.includes("file"));
+  return {
+    ...(image || complete ? { image } : {}),
+    ...(pdf || complete ? { pdf } : {}),
+  };
+}
+
+function pricesPerMillion(pricing: Raw) {
+  const read = (...values: unknown[]) => {
+    for (const value of values) {
+      if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) continue;
+      const usd = Number(value) * 1_000_000;
+      // Match the range the credential API accepts and preserve an explicitly free price.
+      if (Number.isFinite(usd) && usd >= 0 && usd <= 10_000) return usd;
+    }
+  };
+  return {
+    input: read(pricing.prompt, pricing.input),
+    output: read(pricing.completion, pricing.output),
+    cacheRead: read(pricing.input_cache_read, pricing.cache_read),
+    cacheWrite: read(pricing.input_cache_write, pricing.cache_write),
+  };
+}
+
+function listedCapabilities(row: Raw, fileIsPdf: boolean): ListedEndpointModel["caps"] {
+  const top = obj(row.top_provider);
+  const architecture = obj(row.architecture);
+  const modalities = [row.input_modalities, architecture?.input_modalities, obj(row.modalities)?.input].find(
+    (value): value is string[] => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string"),
+  );
+  const limits = {
+    contextWindow: tokenLimit(
+      row.context_length,
+      row.context_window,
+      top?.context_length,
+      top?.context_window,
+      row.max_input_tokens,
+      top?.max_input_tokens,
+    ),
+    maxOutputTokens: tokenLimit(
+      row.max_output_tokens,
+      row.max_completion_tokens,
+      top?.max_output_tokens,
+      top?.max_completion_tokens,
+    ),
+  };
+  const prices = pricesPerMillion(obj(row.pricing) ?? {});
+  const caps = {
+    ...(Object.values(limits).some((value) => value !== undefined) ? { limits } : {}),
+    ...(Object.values(prices).some((value) => value !== undefined) ? { prices } : {}),
+    ...(modalities ? inputAttachmentCapabilities(modalities, fileIsPdf) : {}),
+  };
+  return Object.keys(caps).length ? caps : undefined;
+}
+
 /**
  * The model ids an endpoint lists: `{ data: [{ id }] }` (OpenAI's and Anthropic's `GET /v1/models`, LiteLLM, vLLM,
  * LM Studio, Ollama's `/v1`), or Ollama's own `{ models: [{ model | name }] }`. Outside data: ids that don't look
  * like one are dropped, repeats too, at most 500.
  */
-export function parseEndpointModels(body: unknown): { id: string; label?: string }[] {
+export function parseEndpointModels(body: unknown, options: { fileIsPdf?: boolean } = {}): ListedEndpointModel[] {
   const root = obj(body);
   const rows = Array.isArray(root?.data) ? root.data : Array.isArray(root?.models) ? root.models : [];
   const seen = new Set<string>();
-  const out: { id: string; label?: string }[] = [];
+  const out: ListedEndpointModel[] = [];
   for (const row of rows) {
     const r = obj(row);
     const id = r && [r.id, r.model, r.name].find((v): v is string => typeof v === "string");
     if (!id || !MODEL_ID.test(id) || seen.has(id)) continue;
     seen.add(id);
     const name = r.display_name;
-    out.push({ id, ...(typeof name === "string" && name.trim() && name.length <= 120 ? { label: name.trim() } : {}) });
+    const caps = listedCapabilities(r, options.fileIsPdf === true);
+    out.push({
+      id,
+      ...(typeof name === "string" && name.trim() && name.length <= 120 ? { label: name.trim() } : {}),
+      ...(caps ? { caps } : {}),
+    });
     if (out.length >= MAX_LISTED) break;
   }
   return out;
@@ -67,7 +146,7 @@ export async function listEndpointModels(
   endpoint: Endpoint,
   apiKey: string,
   http: typeof fetch,
-): Promise<{ id: string; label?: string }[]> {
+): Promise<ListedEndpointModel[]> {
   const url = endpoint.style === "anthropic" ? `${endpoint.baseURL}/v1/models` : `${endpoint.baseURL}/models`;
   const headers: Record<string, string> =
     endpoint.style === "anthropic"
@@ -90,7 +169,7 @@ export async function listEndpointModels(
     if (error instanceof ProviderError) throw error;
     throw new ProviderError("could not read the model list", false);
   }
-  return parseEndpointModels(body);
+  return parseEndpointModels(body, { fileIsPdf: new URL(endpoint.baseURL).hostname.toLowerCase() === "openrouter.ai" });
 }
 
 /** A reply's ceilings: a server people pointed us at (stuck, or hostile) can't fill this process's memory or hold a worker. */
@@ -147,12 +226,6 @@ export function endpointHeaders(baseURL: string, session: string, version = "dev
 }
 
 /**
- * Claude reads images wherever it is served (Amazon Bedrock's runtime and Mantle, a gateway): its ids all name it
- * (`global.anthropic.claude-sonnet-5-5`). Another company's model on an Anthropic-compatible endpoint isn't trusted to.
- */
-const readsImages = (model: string) => /claude/i.test(model);
-
-/**
  * The adapter for every workspace endpoint, registered once as `custom`: each call names its endpoint
  * (`StreamOptions.endpoint`) and goes through the catalog's own adapters with that address, Anthropic's in its
  * compatible mode or the Chat Completions one OpenRouter uses. The endpoint's model id is sent, the full
@@ -177,7 +250,7 @@ export function createCustomProvider(
           ? createAnthropicProvider({
               id: "custom",
               baseURL: endpoint.baseURL,
-              compat: { toolChoiceAny: false, images: readsImages(parsed.model) },
+              compat: { toolChoiceAny: false },
               fetch: http,
               maxRetries: options.maxRetries,
             })
@@ -188,7 +261,7 @@ export function createCustomProvider(
             });
       const { costNanoUsd: _reported, ...result } = await inner.stream(
         { ...request, model: parsed.model },
-        streamOptions,
+        { ...streamOptions, endpoint: { ...endpoint, reads: endpoint.reads } },
       );
       return { ...result, model: request.model };
     },

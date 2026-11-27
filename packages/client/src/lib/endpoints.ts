@@ -1,4 +1,12 @@
-import type { EndpointCheck, EndpointCheckResult, EndpointModel, EndpointStyle } from "../api/types";
+import { mergeEndpointDiscovery, shouldProbeAttachment } from "@agenteschat/providers/endpoint-discovery";
+import type {
+  EndpointAttachment,
+  EndpointCheck,
+  EndpointCheckResult,
+  EndpointModel,
+  EndpointOverrides,
+  EndpointStyle,
+} from "../api/types";
 
 /**
  * "Outro provedor" (ADR 0146), web and phone: a workspace's own OpenAI- or Anthropic-compatible endpoint (a gateway,
@@ -8,12 +16,14 @@ export const CUSTOM_PROVIDER = "custom";
 
 export const ENDPOINT_STYLES: readonly EndpointStyle[] = ["openai", "anthropic"];
 
-/** One model of the form: on or off, with its prices as typed (US dollars per million tokens). */
-export interface EndpointModelDraft {
-  id: string;
+export const ENDPOINT_LIMITS = ["contextWindow", "maxOutputTokens"] as const;
+export const ENDPOINT_PRICES = ["input", "output", "cacheRead", "cacheWrite"] as const;
+export const ENDPOINT_ATTACHMENTS = ["image", "pdf"] as const;
+export type EndpointNumberField = (typeof ENDPOINT_LIMITS)[number] | (typeof ENDPOINT_PRICES)[number];
+
+export interface EndpointModelDraft extends Pick<EndpointModel, "id" | "label" | "discovered"> {
   on: boolean;
-  input: string;
-  output: string;
+  manual?: Partial<Record<EndpointNumberField, string> & Record<EndpointAttachment, boolean>>;
 }
 
 export interface EndpointDraft {
@@ -39,11 +49,23 @@ export const endpointBaseExample = (style: EndpointStyle) =>
 const MODEL_ID = /^[\w.:/@+-]{1,200}$/;
 export const MAX_ENDPOINT_MODELS = 100;
 
-/** The models an endpoint listed, merged in: the ones already there keep their choice and prices, new ones start off. */
-export function withListedModels(draft: EndpointDraft, listed: readonly { id: string }[]): EndpointDraft {
-  const have = new Set(draft.models.map((m) => m.id));
-  const fresh = listed.filter((m) => !have.has(m.id)).map((m) => ({ id: m.id, on: false, input: "", output: "" }));
-  return { ...draft, models: [...draft.models, ...fresh] };
+/** Refresh metadata, keeping the selection, typed values and any previous attachment test. */
+export function withListedModels(
+  draft: EndpointDraft,
+  listed: readonly Pick<EndpointModel, "id" | "label" | "discovered">[],
+): EndpointDraft {
+  const byId = new Map(listed.map((m) => [m.id, m]));
+  const models = draft.models.map((m) => {
+    const found = byId.get(m.id);
+    if (!found) return m;
+    byId.delete(m.id);
+    return {
+      ...m,
+      label: found.label ?? m.label,
+      discovered: mergeEndpointDiscovery(m.discovered, found.discovered),
+    };
+  });
+  return { ...draft, models: [...models, ...[...byId.values()].map((m) => ({ ...m, on: false }))] };
 }
 
 /** A model id typed by hand, added on; null when it doesn't look like one. Already there: switched on. */
@@ -52,7 +74,7 @@ export function withTypedModel(draft: EndpointDraft, typed: string): EndpointDra
   if (!MODEL_ID.test(id)) return null;
   if (draft.models.some((m) => m.id === id))
     return { ...draft, models: draft.models.map((m) => (m.id === id ? { ...m, on: true } : m)) };
-  return { ...draft, models: [...draft.models, { id, on: true, input: "", output: "" }] };
+  return { ...draft, models: [...draft.models, { id, on: true }] };
 }
 
 export const withoutModel = (draft: EndpointDraft, id: string): EndpointDraft => ({
@@ -68,23 +90,98 @@ export function parsePrice(text: string): number | undefined | null {
   return /^\d+(\.\d+)?$/.test(t) && Number.isFinite(n) && n <= 10_000 ? n : null;
 }
 
-/** Whether a model's typed prices are fine: both or neither. */
-export function pricesProblem(m: Pick<EndpointModelDraft, "input" | "output">): "invalid" | "both" | null {
-  const input = parsePrice(m.input);
-  const output = parsePrice(m.output);
-  if (input === null || output === null) return "invalid";
-  return (input === undefined) !== (output === undefined) ? "both" : null;
+export function discoveredNumber(m: EndpointModelDraft, field: EndpointNumberField): number | undefined {
+  switch (field) {
+    case "contextWindow":
+    case "maxOutputTokens":
+      return m.discovered?.[field]?.value;
+    default: {
+      const prices = m.discovered?.prices;
+      // Cache prices default to the effective input price, as they do on the server.
+      return (
+        prices?.[field]?.value ??
+        (field === "cacheRead" || field === "cacheWrite"
+          ? (parsePrice(m.manual?.input ?? "") ?? prices?.input?.value)
+          : undefined)
+      );
+    }
+  }
 }
 
-/** The chosen models as the API takes them; null while a price is wrong or none is chosen. */
+export function parseLimit(value: string): number | undefined | null {
+  const raw = value.trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return /^\d+$/.test(raw) && Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+export function modelUnpricedInDraft(m: EndpointModelDraft): boolean {
+  return ENDPOINT_PRICES.slice(0, 2).some(
+    (field) => parsePrice(m.manual?.[field] ?? "") === undefined && discoveredNumber(m, field) === undefined,
+  );
+}
+
+export function numberFieldLabel(field: EndpointNumberField) {
+  if (field === "input") return "endpoint.priceInShort";
+  if (field === "output") return "endpoint.priceOutShort";
+  return `endpoint.capabilities.${field}` as const;
+}
+
+export function editNumber(m: EndpointModelDraft, field: EndpointNumberField, raw: string) {
+  const parse = field === "contextWindow" || field === "maxOutputTokens" ? parseLimit : parsePrice;
+  const auto = discoveredNumber(m, field);
+  return { ...m.manual, [field]: parse(raw) === auto ? undefined : raw };
+}
+
+/** Only write manual fields. An explicit empty object clears the previous overrides. */
 export function endpointModelsOf(draft: Pick<EndpointDraft, "models">): EndpointModel[] | null {
   const on = draft.models.filter((m) => m.on);
-  if (on.length === 0 || on.length > MAX_ENDPOINT_MODELS || on.some((m) => pricesProblem(m))) return null;
-  return on.map((m) => {
-    const input = parsePrice(m.input);
-    const output = parsePrice(m.output);
-    return { id: m.id, ...(input != null && output != null ? { prices: { input, output } } : {}) };
-  });
+  if (on.length === 0 || on.length > MAX_ENDPOINT_MODELS) return null;
+  const models: EndpointModel[] = [];
+  for (const { id, label, discovered, manual } of on) {
+    const overrides: EndpointOverrides = {};
+    for (const field of ENDPOINT_LIMITS) {
+      const value = parseLimit(manual?.[field] ?? "");
+      if (value === null) return null;
+      if (value !== undefined) overrides[field] = value;
+    }
+    for (const field of ENDPOINT_PRICES) {
+      const value = parsePrice(manual?.[field] ?? "");
+      if (value === null) return null;
+      if (value !== undefined) {
+        overrides.prices ??= {};
+        overrides.prices[field] = value;
+      }
+    }
+    for (const field of ENDPOINT_ATTACHMENTS) {
+      const value = manual?.[field];
+      if (value !== undefined) overrides[field] = value;
+    }
+    models.push({
+      id,
+      ...(label ? { label } : {}),
+      ...(discovered ? { discovered } : {}),
+      ...(manual ? { overrides } : {}),
+    });
+  }
+  return models;
+}
+
+/** The automatic test skips manually set and previously discovered attachments, as the server does. */
+export function pendingAttachments(model: EndpointModel, force = false): EndpointAttachment[] {
+  if (!force && (!model.check || model.check === "failed")) return [];
+  return ENDPOINT_ATTACHMENTS.filter((field) =>
+    shouldProbeAttachment(model.discovered?.[field], model.overrides?.[field], force),
+  );
+}
+
+export function attachmentValue(model: EndpointModel, field: EndpointAttachment): boolean | undefined {
+  return model.overrides?.[field] ?? model.discovered?.[field]?.value;
+}
+
+export function attachmentLabel(value: boolean | undefined) {
+  if (value === undefined) return "endpoint.capabilities.unknown";
+  return value ? "endpoint.capabilities.yes" : "endpoint.capabilities.no";
 }
 
 /** The address as the person typed it is worth sending: http(s), with a host. */
@@ -111,12 +208,20 @@ export function draftOfEndpoint(
     style: endpoint.style,
     baseURL: endpoint.baseURL,
     apiKey: "",
-    models: endpoint.models.map((m) => ({
-      id: m.id,
-      on: true,
-      input: m.prices ? String(m.prices.input) : "",
-      output: m.prices ? String(m.prices.output) : "",
-    })),
+    models: endpoint.models.map(({ id, label, prices, overrides, discovered }) => {
+      const { prices: manualPrices, ...manual } = overrides ?? {};
+      const numericPrices = { ...prices, ...manualPrices };
+      const typed: NonNullable<EndpointModelDraft["manual"]> = {};
+      for (const field of ENDPOINT_PRICES) {
+        const value = numericPrices[field];
+        if (value !== undefined) typed[field] = String(value);
+      }
+      for (const field of ENDPOINT_LIMITS) {
+        const value = manual[field];
+        if (value !== undefined) typed[field] = String(value);
+      }
+      return { id, label, discovered, on: true, manual: { ...typed, image: manual.image, pdf: manual.pdf } };
+    }),
   };
 }
 

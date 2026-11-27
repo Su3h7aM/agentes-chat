@@ -20,6 +20,7 @@ import {
 } from "./images";
 import { openAIError, saidIn } from "./openai";
 import {
+  type AttachmentReads,
   type ContentBlock,
   deniedError,
   estimateTokens,
@@ -31,6 +32,7 @@ import {
   type ModelResult,
   type ModelUsage,
   type PartialUsage,
+  PDF_MEDIA_TYPE,
   ProviderError,
   promptChars,
   type StopReason,
@@ -343,9 +345,14 @@ interface Chunk {
   }[];
 }
 
+type UserPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "file"; file: { filename: string; file_data: string } };
+
 type Message =
   | { role: "system"; content: { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }[] }
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | UserPart[] }
   | { role: "tool"; tool_call_id: string; content: string }
   | {
       role: "assistant";
@@ -373,7 +380,7 @@ export function reasoningFor(
   return best ? { effort: best } : undefined;
 }
 
-function toMessages(request: ModelRequest, claude: boolean): Message[] {
+function toMessages(request: ModelRequest, claude: boolean, reads: AttachmentReads): Message[] {
   const blocks = typeof request.system === "string" ? [{ text: request.system, cache: true }] : request.system;
   const system = blocks
     .filter((b) => b.text.length > 0)
@@ -388,8 +395,7 @@ function toMessages(request: ModelRequest, claude: boolean): Message[] {
         : {}),
     }));
   const out: Message[] = system.length > 0 ? [{ role: "system", content: system }] : [];
-  // ponytail: images left out for every model; send them once the catalog knows which OpenRouter models read images.
-  for (const m of withoutImages(request.messages, request.model)) {
+  for (const m of withoutImages(request.messages, request.model, reads)) {
     const parts: ContentBlock[] = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
     const text = parts.flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("\n\n");
     if (m.role === "assistant") {
@@ -410,11 +416,24 @@ function toMessages(request: ModelRequest, claude: boolean): Message[] {
       });
       continue;
     }
+    const attachments: UserPart[] = [];
     for (const b of parts) {
-      if (b.type === "tool_result")
-        out.push({ role: "tool", tool_call_id: b.toolUseId, content: b.isError ? `ERROR: ${b.content}` : b.content });
+      if (b.type !== "tool_result") continue;
+      out.push({ role: "tool", tool_call_id: b.toolUseId, content: b.isError ? `ERROR: ${b.content}` : b.content });
+      for (const i of b.images ?? []) {
+        const url = `data:${i.mediaType};base64,${i.data}`;
+        attachments.push(
+          i.mediaType === PDF_MEDIA_TYPE
+            ? { type: "file", file: { filename: i.name ?? "document.pdf", file_data: url } }
+            : { type: "image_url", image_url: { url } },
+        );
+      }
     }
-    if (text) out.push({ role: "user", content: text });
+    // Chat Completions requires every parallel tool reply before the next user message.
+    if (attachments.length > 0) {
+      if (text) attachments.push({ type: "text", text });
+      out.push({ role: "user", content: attachments });
+    } else if (text) out.push({ role: "user", content: text });
   }
   return out;
 }
@@ -466,7 +485,7 @@ function effortRefusal(error: unknown): { wanted: string; supported: string[] } 
 /** What each endpoint said it takes, per `${baseURL}|${model}`: learned once, so the refusal costs one turn, not every. */
 const effortSupport = new Map<string, readonly string[]>();
 
-function toBody(request: ModelRequest, compatible: boolean) {
+function toBody(request: ModelRequest, compatible: boolean, reads: AttachmentReads) {
   const claude = !compatible && isClaude(request.model);
   const reasoning = compatible ? undefined : reasoningFor(request.effort, modelInfo(request.model));
   // A workspace endpoint (#432): Chat Completions' own `reasoning_effort`, which OpenAI, vLLM, LiteLLM and most gateways
@@ -475,7 +494,7 @@ function toBody(request: ModelRequest, compatible: boolean) {
     compatible && request.effort && request.effort !== "none" ? effortWithin(request.effort) : undefined;
   return {
     model: request.model,
-    messages: toMessages(request, claude),
+    messages: toMessages(request, claude, reads),
     max_tokens: request.maxTokens,
     stream: true as const,
     ...(request.tools && request.tools.length > 0
@@ -601,8 +620,9 @@ export function createOpenRouterProvider(
   const compatible = options.compatible;
   return {
     id: compatible?.id ?? "openrouter",
-    async stream(input, { apiKey, onDelta }): Promise<ModelResult> {
+    async stream(input, { apiKey, onDelta, endpoint }): Promise<ModelResult> {
       const request = laidOut(input);
+      const reads = (compatible && endpoint?.reads) || {};
       const partial: PartialUsage = {
         inputTokens: null,
         cacheReadTokens: 0,
@@ -625,7 +645,7 @@ export function createOpenRouterProvider(
           fetch: options.fetch,
         });
         // An effort the endpoint refused before goes out already mapped, so only the first turn pays for learning it.
-        const body = toBody(request, compatible !== undefined) as unknown as Record<string, unknown>;
+        const body = toBody(request, compatible !== undefined, reads) as unknown as Record<string, unknown>;
         const supportKey = compatible ? `${compatible.baseURL}|${request.model}` : undefined;
         const support = supportKey ? effortSupport.get(supportKey) : undefined;
         const asked = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
@@ -725,7 +745,7 @@ export function createOpenRouterProvider(
                 cacheWriteTokens: 0,
               },
           ...(cost !== undefined ? { costNanoUsd: cost } : {}),
-          ...(hasToolImages(request.messages, lostWithoutImages()) ? { imagesLeftOut: true as const } : {}),
+          ...(hasToolImages(request.messages, lostWithoutImages(reads)) ? { imagesLeftOut: true as const } : {}),
         };
       } catch (error) {
         const mapped = request.signal?.aborted

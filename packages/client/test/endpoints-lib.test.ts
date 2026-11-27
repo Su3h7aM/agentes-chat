@@ -10,7 +10,7 @@ import {
   modelsShown,
   modelUnpriced,
   parsePrice,
-  pricesProblem,
+  pendingAttachments,
   withChecks,
   withListedModels,
   withoutModel,
@@ -66,24 +66,39 @@ describe("the endpoint form", () => {
     expect(endpointReady(d)).toBe(true);
   });
 
-  test("prices: both or neither, a comma reads as a point, junk is refused", () => {
+  test("manual prices can be partial, accept commas and keep zero", () => {
     expect(parsePrice("")).toBeUndefined();
     expect(parsePrice("0,5")).toBe(0.5);
-    expect(parsePrice("1.25")).toBe(1.25);
     expect(parsePrice("-1")).toBeNull();
-    expect(parsePrice("abc")).toBeNull();
-    expect(pricesProblem({ input: "1", output: "" })).toBe("both");
-    expect(pricesProblem({ input: "x", output: "1" })).toBe("invalid");
-    const d = {
-      models: [
-        { id: "a", on: true, input: "1", output: "2" },
-        { id: "b", on: true, input: "", output: "" },
-        { id: "c", on: false, input: "x", output: "" },
-      ],
-    };
-    expect(endpointModelsOf(d)).toEqual([{ id: "a", prices: { input: 1, output: 2 } }, { id: "b" }]);
-    expect(endpointModelsOf({ models: [{ id: "a", on: true, input: "1", output: "" }] })).toBeNull();
+    expect(parsePrice("10001")).toBeNull();
+    expect(
+      endpointModelsOf({ models: [{ id: "a", on: true, manual: { input: "0", cacheRead: "0,5", image: false } }] }),
+    ).toEqual([{ id: "a", overrides: { prices: { input: 0, cacheRead: 0.5 }, image: false } }]);
+    expect(endpointModelsOf({ models: [{ id: "a", on: true, manual: { contextWindow: "1.5" } }] })).toBeNull();
     expect(endpointModelsOf({ models: [] })).toBeNull();
+  });
+
+  test("refresh and reset keep previous probes and migrate only the remaining legacy prices", () => {
+    const discovered = { image: { discoveredAt: "2026-11-26T19:00:00Z", value: true, source: "probe" as const } };
+    const draft = draftOfEndpoint("GW", {
+      style: "openai",
+      baseURL: "https://example.com",
+      models: [{ id: "a", prices: { input: 1, output: 2 }, overrides: { image: false }, discovered }],
+    });
+    const [model] = withListedModels(draft, [
+      {
+        id: "a",
+        discovered: { ...discovered, image: { value: false, source: "catalog", discoveredAt: "2026-11-26T19:00:00Z" } },
+      },
+    ]).models;
+    expect(model?.discovered?.image).toEqual(discovered.image);
+    if (!model) throw new Error("Missing model");
+    expect(endpointModelsOf({ models: [{ ...model, manual: { ...model.manual, input: undefined } }] })).toEqual([
+      { id: "a", discovered, overrides: { prices: { output: 2 }, image: false } },
+    ]);
+    expect(endpointModelsOf({ models: [{ ...model, manual: {} }] })).toEqual([{ id: "a", discovered, overrides: {} }]);
+    expect(pendingAttachments({ id: "a", discovered, check: "ok" })).toEqual(["pdf"]);
+    expect(pendingAttachments({ id: "a", check: "failed" })).toEqual([]);
   });
 
   test("an address worth sending; a saved endpoint back in the form; results in the form's order", () => {
@@ -95,8 +110,8 @@ describe("the endpoint form", () => {
       models: [{ id: "x", prices: { input: 1, output: 3 } }, { id: "y" }],
     });
     expect(d.models).toEqual([
-      { id: "x", on: true, input: "1", output: "3" },
-      { id: "y", on: true, input: "", output: "" },
+      { id: "x", on: true, manual: { input: "1", output: "3" } },
+      { id: "y", on: true, manual: {} },
     ]);
     expect(
       checksInOrder(d, [
@@ -210,4 +225,76 @@ describe("endpoint models in the pickers", () => {
       ]),
     ).toEqual({ model: `custom:${b}:chat` });
   });
+});
+
+test("automatic probes test catalog hints but skip authoritative and manual fields", () => {
+  const discoveredAt = "2026-11-26T19:00:00Z";
+  expect(
+    pendingAttachments({
+      id: "a",
+      check: "ok",
+      discovered: {
+        image: { value: false, source: "catalog", discoveredAt },
+        pdf: { value: true, source: "endpoint", discoveredAt },
+      },
+    }),
+  ).toEqual(["image"]);
+  expect(pendingAttachments({ id: "a", check: "ok", overrides: { image: false } })).toEqual(["pdf"]);
+});
+
+test("refresh merges every discovered field using source and date", () => {
+  const old = "2026-01-01T00:00:00Z";
+  const recent = "2026-02-01T00:00:00Z";
+  const draft = {
+    ...emptyEndpointDraft(),
+    models: [
+      {
+        id: "a",
+        on: true,
+        discovered: {
+          contextWindow: { value: 100, source: "endpoint" as const, discoveredAt: old },
+          prices: { input: { value: 1, source: "catalog" as const, discoveredAt: old } },
+          image: { value: true, source: "probe" as const, discoveredAt: old },
+        },
+      },
+    ],
+  };
+  const updated = withListedModels(draft, [
+    {
+      id: "a",
+      discovered: {
+        contextWindow: { value: 200, source: "catalog", discoveredAt: recent },
+        prices: {
+          input: { value: 0, source: "catalog", discoveredAt: recent },
+          output: { value: 3, source: "endpoint", discoveredAt: recent },
+        },
+        image: { value: false, source: "endpoint", discoveredAt: recent },
+      },
+    },
+  ]);
+  expect(updated.models[0]?.discovered).toEqual({
+    contextWindow: { value: 100, source: "endpoint", discoveredAt: old },
+    prices: {
+      input: { value: 0, source: "catalog", discoveredAt: recent },
+      output: { value: 3, source: "endpoint", discoveredAt: recent },
+    },
+    image: { value: false, source: "endpoint", discoveredAt: recent },
+  });
+});
+
+test("forced retest includes only fields the server can probe", () => {
+  const date = "2026-01-01T00:00:00Z";
+  const model = {
+    id: "m",
+    check: "ok" as const,
+    overrides: { image: false },
+    discovered: { pdf: { value: true, source: "endpoint" as const, discoveredAt: date } },
+  };
+  expect(pendingAttachments(model, true)).toEqual([]);
+  expect(
+    pendingAttachments(
+      { ...model, overrides: {}, discovered: { pdf: { value: true, source: "probe", discoveredAt: date } } },
+      true,
+    ),
+  ).toEqual(["image", "pdf"]);
 });

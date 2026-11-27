@@ -365,18 +365,69 @@ export const EndpointPrices = z
   })
   .openapi("EndpointPrices");
 
+const EndpointLimits = z.object({
+  contextWindow: z.int().positive().optional(),
+  maxOutputTokens: z.int().positive().optional(),
+});
+const EndpointPartialPrices = EndpointPrices.partial();
+const EndpointMetadataSource = z.enum(["endpoint", "catalog", "probe"]);
+const EndpointLegacyAttachment = z.object({ value: z.boolean(), source: EndpointMetadataSource });
+const EndpointNumberDiscovery = z.object({
+  value: z.number().nonnegative(),
+  source: EndpointMetadataSource,
+  discoveredAt: z.iso.datetime(),
+});
+const EndpointAttachmentDiscovery = z.object({
+  value: z.boolean(),
+  source: EndpointMetadataSource,
+  discoveredAt: z.iso.datetime(),
+});
+const EndpointDiscovered = z
+  .object({
+    contextWindow: EndpointNumberDiscovery.optional(),
+    maxOutputTokens: EndpointNumberDiscovery.optional(),
+    prices: z
+      .object({
+        input: EndpointNumberDiscovery.optional(),
+        output: EndpointNumberDiscovery.optional(),
+        cacheRead: EndpointNumberDiscovery.optional(),
+        cacheWrite: EndpointNumberDiscovery.optional(),
+      })
+      .passthrough()
+      .optional(),
+    image: EndpointAttachmentDiscovery.optional(),
+    pdf: EndpointAttachmentDiscovery.optional(),
+  })
+  .passthrough();
+const EndpointLegacyDiscovered = z
+  .object({
+    discoveredAt: z.iso.datetime(),
+    limits: z.object({ source: EndpointMetadataSource, value: EndpointLimits }).optional(),
+    prices: z.object({ source: EndpointMetadataSource, value: EndpointPartialPrices }).optional(),
+    image: EndpointLegacyAttachment.optional(),
+    pdf: EndpointLegacyAttachment.optional(),
+  })
+  .passthrough();
+
 export const EndpointModel = z
   .object({
     id: z.string().min(1).max(200).openapi({ description: "The id the endpoint takes." }),
     label: z.string().max(120).optional(),
     prices: EndpointPrices.optional().openapi({
-      description: "Absent: unpriced. Its calls are recorded with their tokens and cost 0, so no budget limits them.",
+      description: "Legacy manual pricing in US dollars per million tokens.",
     }),
+    overrides: EndpointLimits.extend({
+      prices: EndpointPartialPrices.optional(),
+      image: z.boolean().optional(),
+      pdf: z.boolean().optional(),
+    }).optional(),
+    discovered: z.union([EndpointDiscovered, EndpointLegacyDiscovered]).optional(),
     check: z
       .enum(["ok", "no_tools", "failed"])
       .optional()
       .openapi({ description: "The last test call: it called a tool, answered without one, or failed." }),
   })
+  .passthrough()
   .openapi("EndpointModel");
 
 export const EndpointStyle = z.enum(ENDPOINT_STYLES).openapi("EndpointStyle", {
