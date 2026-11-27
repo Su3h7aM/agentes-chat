@@ -63,6 +63,7 @@ BIN_DIR=$SRC/apps/desktop/src-tauri/binaries
 NATIVE_DIR=$SRC/apps/desktop/src-tauri/native
 RUNNER=$BIN_DIR/agentes-runner-$TRIPLE
 BROWSER_BIN=$BIN_DIR/agent-browser-$TRIPLE
+DESKTOP_BIN=$BIN_DIR/agent-desktop-$TRIPLE
 
 # Cargo's registry and git checkouts and Bun's install cache are the host's own, shared with a native build. The target
 # folder is the image's own (`<host target>/anylinux`): Arch's rustc and the host's would otherwise invalidate each
@@ -135,6 +136,11 @@ say "agent-browser $AB_VERSION"
 curl -fsSL -o "$BROWSER_BIN" "https://github.com/vercel-labs/agent-browser/releases/download/v$AB_VERSION/$AB_ASSET"
 echo "$AB_SHA  $BROWSER_BIN" | sha256sum -c -
 chmod +x "$BROWSER_BIN"
+
+say "agent-desktop"
+bun apps/desktop/scripts/fetch-agent-desktop.ts "$BIN_DIR" "$TRIPLE"
+test -x "$DESKTOP_BIN"
+"$DESKTOP_BIN" --version
 
 say "The server here once"
 bun apps/desktop/scripts/server-smoke.ts "$RUNNER" "$NATIVE_DIR"
@@ -304,10 +310,14 @@ EOF
   bun "$SRC/apps/desktop/linux/stage-resources.ts" "$SRC/apps/desktop/src-tauri" "$appdir/lib/agentes.chat" \
     "$SRC/apps/desktop/src-tauri/tauri.conf.json" "$SRC/apps/desktop/src-tauri/tauri.native.conf.json"
 
-  # The sidecars sit beside the executable (the runner is found as `current_exe().parent()/agentes-runner`): both are
-  # self-contained, and neither is passed to quick-sharun, which would rewrite them.
+  # The sidecars sit beside the executable (the runner is found as `current_exe().parent()/agentes-runner`): all three are
+  # self-contained, and none is passed to quick-sharun, which would rewrite them.
   install -m 755 "$RUNNER" "$appdir/bin/agentes-runner"
   install -m 755 "$BROWSER_BIN" "$appdir/bin/agent-browser"
+  install -m 755 "$DESKTOP_BIN" "$appdir/bin/agent-desktop"
+  for name in agentes-runner agent-browser agent-desktop; do
+    test -x "$appdir/bin/$name"
+  done
 
   test -s "$appdir/lib/agentes.chat/server/native.js"
   test -s "$appdir/lib/agentes.chat/web/index.html"

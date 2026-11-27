@@ -63,9 +63,9 @@ unversioned WebKitGTK dependency; both requirements must be satisfied. The AppIm
 
 Under sharun the executable is `AppDir/bin/<name>`, and Tauri's resource folder is `<executable's folder>/../lib/<product
 name>` first (`tauri-utils` `resource_dir`), so the resources are `AppDir/lib/agentes.chat/`, staged from the lists in
-`tauri.conf.json` and `tauri.native.conf.json` (one list), and the sidecars are `AppDir/bin/agentes-runner` and
-`agent-browser`, where `current_exe().parent()` finds them. Each exists once, and the sidecars are copied as built, after
-`quick-sharun`, which would rewrite them.
+`tauri.conf.json` and `tauri.native.conf.json` (one list), and the sidecars are `AppDir/bin/agentes-runner`,
+`agent-browser` and `agent-desktop`, where `current_exe().parent()` finds them. Each exists once, and the sidecars are
+copied as built, after `quick-sharun`, which would rewrite them.
 
 The updater needs two things the Tauri bundler normally gives. The binary carries a marker for the kind of package it is
 in (`__TAURI_BUNDLE_TYPE_VAR_UNK`, which the bundler's private `patch_binary` in `tauri-bundler` `src/bundle.rs` rewrites
@@ -80,9 +80,10 @@ mounted copy.
 
 The image's base (tag and digest), `quick-sharun.sh` and `get-debloated-pkgs.sh` (one commit of Anylinux-AppImages, never
 `main`, each with its sha256; `quick-sharun` pins sharun, appimagetool and uruntime by sha256 itself), Bun (the version of
-`package.json`, which the script checks against the image's, with the release zips' sha256) and agent-browser (the
-version and sha256 of `machine-protocol.ts`) are pinned. Not pinned: Arch's packages and the debloated set, which has one
-rolling release; both are whatever was newest when the image layer was built, and `docker rmi` of the image refreshes them.
+`package.json`, which the script checks against the image's, with the release zips' sha256), agent-browser and
+agent-desktop (the version and sha256 of `machine-protocol.ts`) are pinned. Not pinned: Arch's packages and the debloated
+set, which has one rolling release; both are whatever was newest when the image layer was built, and `docker rmi` of the
+image refreshes them.
 
 ### 6. Caches: the host's own
 
