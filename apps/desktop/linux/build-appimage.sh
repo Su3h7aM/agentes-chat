@@ -122,6 +122,15 @@ test -s "$NATIVE_DIR/server/native.js"
 test -s "$NATIVE_DIR/web/index.html"
 test -d "$NATIVE_DIR/licenses/npm"
 
+# The web build writes a Brotli and a gzip copy beside each large script and stylesheet
+# (apps/web/scripts/compress-dist.ts) for a server with nothing in front of it. The AppImage is already one
+# compressed payload (DwarFS), so those copies would only duplicate the originals inside it. Removed here, for the
+# desktop app alone: its server sends the originals with identity encoding when the copies are absent. Native
+# packages and the container keep them (scripts/native-package.ts).
+find "$NATIVE_DIR/web" -type f \( -name '*.br' -o -name '*.gz' \) -delete
+test -n "$(find "$NATIVE_DIR/web" -name '*.js' -print -quit)"
+test -n "$(find "$NATIVE_DIR/web" -name '*.css' -print -quit)"
+
 say "The runner"
 bun build --compile --target="$BUN_TARGET" apps/server/runner/main.ts --outfile "$RUNNER"
 chmod +x "$RUNNER"
@@ -223,6 +232,18 @@ verify_appdir() {
       exit 1
     fi
   done
+  # The web build's precompressed copies are for a server of its own (native packages, the container); the
+  # AppImage is compressed as a whole, so stage_appdir removes them from web/. Its scripts and stylesheets must
+  # still be there, original and uncompressed.
+  if [ -n "$(find "$appdir/lib/agentes.chat/web" \( -name '*.br' -o -name '*.gz' \) -print -quit)" ]; then
+    echo "The AppDir carries precompressed web assets (its payload is already compressed)" >&2
+    exit 1
+  fi
+  if [ -z "$(find "$appdir/lib/agentes.chat/web" -name '*.js' -print -quit)" ] \
+    || [ -z "$(find "$appdir/lib/agentes.chat/web" -name '*.css' -print -quit)" ]; then
+    echo "The AppDir's web assets are missing their original scripts or stylesheets" >&2
+    exit 1
+  fi
 }
 
 # KDE and other desktops read an AppImage's icon through libappimage, which only understands SquashFS. appimagetool
